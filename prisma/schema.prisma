@@ -8,22 +8,27 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
+// ---------------------------------------------------------------------------
+// Identity
+// ---------------------------------------------------------------------------
+
 model User {
-  id                       String    @id @default(uuid())
-  email                    String    @unique
+  id                       String            @id @default(uuid())
+  email                    String            @unique
   passwordHash             String
   firstName                String
   lastName                 String
-  role                     UserRole  @default(OWNER)
-  isActive                 Boolean   @default(true)
-  isEmailVerified          Boolean   @default(false)
-  emailVerificationToken   String?   @unique
+  role                     UserRole          @default(OWNER)
+  isActive                 Boolean           @default(true)
+  isEmailVerified          Boolean           @default(false)
+  emailVerificationToken   String?           @unique
   emailVerificationCode    String?
   emailVerificationExpires DateTime?
-  createdAt                DateTime  @default(now())
-  updatedAt                DateTime  @updatedAt
+  createdAt                DateTime          @default(now())
+  updatedAt                DateTime          @updatedAt
   company                  Company?
   sessions                 Session[]
+  activities               InvoiceActivity[]
 
   @@map("users")
 }
@@ -45,56 +50,64 @@ model Session {
 }
 
 model Company {
-  id                String     @id @default(uuid())
-  userId            String     @unique
+  id                String             @id @default(uuid())
+  userId            String             @unique
   name              String
   email             String?
   phone             String?
   address           String?
   city              String?
   state             String?
-  country           String     @default("India")
+  country           String             @default("India")
   postalCode        String?
   gstin             String?
   pan               String?
   logoUrl           String?
-  invoicePrefix     String     @default("INV-")
-  nextInvoiceNumber Int        @default(1001)
-  defaultTaxRate    Decimal    @default(18.00) @db.Decimal(5, 2)
+  invoicePrefix     String             @default("INV-")
+  nextInvoiceNumber Int                @default(1001)
+  defaultTaxRate    Decimal            @default(18.00) @db.Decimal(5, 2)
   bankName          String?
   accountNumber     String?
   ifscCode          String?
   branch            String?
-  createdAt         DateTime   @default(now())
-  updatedAt         DateTime   @updatedAt
-  user              User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
   customers         Customer[]
   invoices          Invoice[]
   payments          Payment[]
   products          Product[]
+  invoiceSettings   InvoiceSettings?
+  sequences         DocumentSequence[]
+  notes             CreditDebitNote[]
+  recurring         RecurringInvoice[]
+  reminders         PaymentReminder[]
+  activities        InvoiceActivity[]
 
   @@map("companies")
 }
 
 model Customer {
-  id         String       @id @default(uuid())
+  id         String             @id @default(uuid())
   companyId  String
   name       String
   email      String?
   phone      String?
-  type       CustomerType @default(BUSINESS)
+  type       CustomerType       @default(BUSINESS)
   gstin      String?
   address    String?
   city       String?
   state      String?
-  country    String       @default("India")
+  country    String             @default("India")
   postalCode String?
-  isActive   Boolean      @default(true)
-  createdAt  DateTime     @default(now())
-  updatedAt  DateTime     @updatedAt
-  company    Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  isActive   Boolean            @default(true)
+  createdAt  DateTime           @default(now())
+  updatedAt  DateTime           @updatedAt
+  company    Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
   invoices   Invoice[]
   products   Product[]
+  notes      CreditDebitNote[]
+  recurring  RecurringInvoice[]
 
   @@index([companyId])
   @@map("customers")
@@ -122,55 +135,124 @@ model Product {
   @@map("products")
 }
 
-model Invoice {
-  id             String        @id @default(uuid())
-  companyId      String
-  customerId     String
-  invoiceNumber  String        @unique
-  status         InvoiceStatus @default(DRAFT)
-  issueDate      DateTime      @default(now())
-  dueDate        DateTime
-  subtotal       Decimal       @db.Decimal(12, 2)
-  discountAmount Decimal       @default(0.00) @db.Decimal(12, 2)
-  taxAmount      Decimal       @db.Decimal(12, 2)
-  cgstAmount     Decimal       @default(0.00) @db.Decimal(12, 2)
-  sgstAmount     Decimal       @default(0.00) @db.Decimal(12, 2)
-  igstAmount     Decimal       @default(0.00) @db.Decimal(12, 2)
-  grandTotal     Decimal       @db.Decimal(12, 2)
-  amountPaid     Decimal       @default(0.00) @db.Decimal(12, 2)
-  balanceDue     Decimal       @db.Decimal(12, 2)
-  notes          String?
-  terms          String?
-  createdAt      DateTime      @default(now())
-  updatedAt      DateTime      @updatedAt
-  items          InvoiceItem[]
-  company        Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  customer       Customer      @relation(fields: [customerId], references: [id])
-  payments       Payment[]
+// ---------------------------------------------------------------------------
+// Invoicing
+// ---------------------------------------------------------------------------
 
+model Invoice {
+  id            String        @id @default(uuid())
+  companyId     String
+  customerId    String
+  invoiceNumber String
+  /// Numeric part of the number, kept so sequences can be audited and sorted.
+  sequenceNo    Int           @default(0)
+  /// Indian financial year the invoice falls in, e.g. "2026-27".
+  financialYear String        @default("")
+  status        InvoiceStatus @default(DRAFT)
+  issueDate     DateTime      @default(now())
+  dueDate       DateTime
+  poNumber      String?
+  reference     String?
+  currency      String        @default("INR")
+
+  /// Snapshot of the buyer as it was when the invoice was issued. A later edit
+  /// to the customer record must never silently rewrite an issued document.
+  billingName       String  @default("")
+  billingEmail      String?
+  billingPhone      String?
+  billingGstin      String?
+  billingAddress    String?
+  billingCity       String?
+  billingState      String?
+  billingCountry    String  @default("India")
+  billingPostalCode String?
+
+  /// Destination state for GST. Equal to the seller state => CGST+SGST, else IGST.
+  placeOfSupply     String?
+  placeOfSupplyCode String?
+  isIgst            Boolean @default(false)
+  isReverseCharge   Boolean @default(false)
+
+  subtotal        Decimal @db.Decimal(14, 2)
+  discountAmount  Decimal @default(0.00) @db.Decimal(14, 2)
+  taxableAmount   Decimal @default(0.00) @db.Decimal(14, 2)
+  taxAmount       Decimal @db.Decimal(14, 2)
+  cgstAmount      Decimal @default(0.00) @db.Decimal(14, 2)
+  sgstAmount      Decimal @default(0.00) @db.Decimal(14, 2)
+  igstAmount      Decimal @default(0.00) @db.Decimal(14, 2)
+  roundOff        Decimal @default(0.00) @db.Decimal(8, 2)
+  grandTotal      Decimal @db.Decimal(14, 2)
+  amountPaid      Decimal @default(0.00) @db.Decimal(14, 2)
+  creditNoteTotal Decimal @default(0.00) @db.Decimal(14, 2)
+  debitNoteTotal  Decimal @default(0.00) @db.Decimal(14, 2)
+  balanceDue      Decimal @db.Decimal(14, 2)
+
+  notes           String?
+  terms           String?
+  internalNotes   String?
+  cancelledReason String?
+
+  sentAt      DateTime?
+  viewedAt    DateTime?
+  paidAt      DateTime?
+  cancelledAt DateTime?
+
+  recurringInvoiceId String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  items      InvoiceItem[]
+  company    Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  customer   Customer          @relation(fields: [customerId], references: [id])
+  payments   Payment[]
+  notesDocs  CreditDebitNote[]
+  reminders  PaymentReminder[]
+  activities InvoiceActivity[]
+  recurring  RecurringInvoice? @relation(fields: [recurringInvoiceId], references: [id], onDelete: SetNull)
+
+  @@unique([companyId, invoiceNumber])
   @@index([companyId])
   @@index([customerId])
   @@index([status])
+  @@index([companyId, issueDate])
+  @@index([companyId, financialYear])
+  @@index([companyId, status, dueDate])
   @@map("invoices")
 }
 
 model InvoiceItem {
-  id              String  @id @default(uuid())
-  invoiceId       String
-  productId       String?
-  name            String
-  description     String?
-  quantity        Decimal @db.Decimal(10, 2)
-  unitPrice       Decimal @db.Decimal(12, 2)
+  id          String  @id @default(uuid())
+  invoiceId   String
+  productId   String?
+  name        String
+  description String?
+  hsnSacCode  String?
+  unit        String  @default("PCS")
+  sortOrder   Int     @default(0)
+
+  quantity        Decimal @db.Decimal(12, 3)
+  unitPrice       Decimal @db.Decimal(14, 2)
   discountPercent Decimal @default(0.00) @db.Decimal(5, 2)
+  discountAmount  Decimal @default(0.00) @db.Decimal(14, 2)
   taxRate         Decimal @default(0.00) @db.Decimal(5, 2)
-  hsnSacCode      String?
-  subtotal        Decimal @db.Decimal(12, 2)
-  taxAmount       Decimal @db.Decimal(12, 2)
-  total           Decimal @db.Decimal(12, 2)
-  invoice         Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  /// Gross line value before discount (quantity x unitPrice).
+  subtotal      Decimal @db.Decimal(14, 2)
+  /// Value GST is charged on (subtotal - discountAmount).
+  taxableAmount Decimal @default(0.00) @db.Decimal(14, 2)
+  cgstRate      Decimal @default(0.00) @db.Decimal(5, 2)
+  cgstAmount    Decimal @default(0.00) @db.Decimal(14, 2)
+  sgstRate      Decimal @default(0.00) @db.Decimal(5, 2)
+  sgstAmount    Decimal @default(0.00) @db.Decimal(14, 2)
+  igstRate      Decimal @default(0.00) @db.Decimal(5, 2)
+  igstAmount    Decimal @default(0.00) @db.Decimal(14, 2)
+  taxAmount     Decimal @db.Decimal(14, 2)
+  total         Decimal @db.Decimal(14, 2)
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
 
   @@index([invoiceId])
+  @@index([productId])
   @@map("invoice_items")
 }
 
@@ -178,19 +260,289 @@ model Payment {
   id              String        @id @default(uuid())
   invoiceId       String
   companyId       String
-  amount          Decimal       @db.Decimal(12, 2)
+  amount          Decimal       @db.Decimal(14, 2)
   paymentDate     DateTime      @default(now())
   paymentMethod   PaymentMethod @default(BANK_TRANSFER)
   referenceNumber String?
   notes           String?
   createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
   company         Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
   invoice         Invoice       @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
 
   @@index([invoiceId])
   @@index([companyId])
+  @@index([companyId, paymentDate])
   @@map("payments")
 }
+
+// ---------------------------------------------------------------------------
+// Credit / debit notes
+// ---------------------------------------------------------------------------
+
+model CreditDebitNote {
+  id            String     @id @default(uuid())
+  companyId     String
+  customerId    String
+  invoiceId     String?
+  noteType      NoteType
+  noteNumber    String
+  sequenceNo    Int        @default(0)
+  financialYear String     @default("")
+  status        NoteStatus @default(DRAFT)
+  noteDate      DateTime   @default(now())
+  reason        String?
+
+  billingName       String  @default("")
+  billingGstin      String?
+  billingAddress    String?
+  billingState      String?
+  placeOfSupply     String?
+  placeOfSupplyCode String?
+  isIgst            Boolean @default(false)
+
+  subtotal       Decimal @db.Decimal(14, 2)
+  discountAmount Decimal @default(0.00) @db.Decimal(14, 2)
+  taxableAmount  Decimal @default(0.00) @db.Decimal(14, 2)
+  cgstAmount     Decimal @default(0.00) @db.Decimal(14, 2)
+  sgstAmount     Decimal @default(0.00) @db.Decimal(14, 2)
+  igstAmount     Decimal @default(0.00) @db.Decimal(14, 2)
+  taxAmount      Decimal @db.Decimal(14, 2)
+  roundOff       Decimal @default(0.00) @db.Decimal(8, 2)
+  grandTotal     Decimal @db.Decimal(14, 2)
+
+  notes     String?
+  issuedAt  DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  company  Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  customer Customer              @relation(fields: [customerId], references: [id])
+  invoice  Invoice?              @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  items    CreditDebitNoteItem[]
+
+  @@unique([companyId, noteNumber])
+  @@index([companyId, noteType])
+  @@index([customerId])
+  @@index([invoiceId])
+  @@index([companyId, noteDate])
+  @@map("credit_debit_notes")
+}
+
+model CreditDebitNoteItem {
+  id          String  @id @default(uuid())
+  noteId      String
+  productId   String?
+  name        String
+  description String?
+  hsnSacCode  String?
+  unit        String  @default("PCS")
+  sortOrder   Int     @default(0)
+
+  quantity        Decimal @db.Decimal(12, 3)
+  unitPrice       Decimal @db.Decimal(14, 2)
+  discountPercent Decimal @default(0.00) @db.Decimal(5, 2)
+  discountAmount  Decimal @default(0.00) @db.Decimal(14, 2)
+  taxRate         Decimal @default(0.00) @db.Decimal(5, 2)
+  subtotal        Decimal @db.Decimal(14, 2)
+  taxableAmount   Decimal @default(0.00) @db.Decimal(14, 2)
+  cgstRate        Decimal @default(0.00) @db.Decimal(5, 2)
+  cgstAmount      Decimal @default(0.00) @db.Decimal(14, 2)
+  sgstRate        Decimal @default(0.00) @db.Decimal(5, 2)
+  sgstAmount      Decimal @default(0.00) @db.Decimal(14, 2)
+  igstRate        Decimal @default(0.00) @db.Decimal(5, 2)
+  igstAmount      Decimal @default(0.00) @db.Decimal(14, 2)
+  taxAmount       Decimal @db.Decimal(14, 2)
+  total           Decimal @db.Decimal(14, 2)
+
+  note CreditDebitNote @relation(fields: [noteId], references: [id], onDelete: Cascade)
+
+  @@index([noteId])
+  @@map("credit_debit_note_items")
+}
+
+// ---------------------------------------------------------------------------
+// Recurring invoices
+// ---------------------------------------------------------------------------
+
+model RecurringInvoice {
+  id         String @id @default(uuid())
+  companyId  String
+  customerId String
+  title      String
+
+  frequency      RecurringFrequency @default(MONTHLY)
+  intervalCount  Int                @default(1)
+  startDate      DateTime
+  endDate        DateTime?
+  nextRunDate    DateTime
+  lastRunDate    DateTime?
+  maxOccurrences Int?
+  occurrences    Int                @default(0)
+  dueInDays      Int                @default(15)
+  autoSend       Boolean            @default(false)
+  status         RecurringStatus    @default(ACTIVE)
+
+  placeOfSupply     String?
+  placeOfSupplyCode String?
+  notes             String?
+  terms             String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company           Company                @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  customer          Customer               @relation(fields: [customerId], references: [id])
+  items             RecurringInvoiceItem[]
+  generatedInvoices Invoice[]
+
+  @@index([companyId])
+  @@index([customerId])
+  @@index([status, nextRunDate])
+  @@map("recurring_invoices")
+}
+
+model RecurringInvoiceItem {
+  id              String  @id @default(uuid())
+  recurringId     String
+  productId       String?
+  name            String
+  description     String?
+  hsnSacCode      String?
+  unit            String  @default("PCS")
+  sortOrder       Int     @default(0)
+  quantity        Decimal @db.Decimal(12, 3)
+  unitPrice       Decimal @db.Decimal(14, 2)
+  discountPercent Decimal @default(0.00) @db.Decimal(5, 2)
+  taxRate         Decimal @default(0.00) @db.Decimal(5, 2)
+
+  recurring RecurringInvoice @relation(fields: [recurringId], references: [id], onDelete: Cascade)
+
+  @@index([recurringId])
+  @@map("recurring_invoice_items")
+}
+
+// ---------------------------------------------------------------------------
+// Reminders, activity and settings
+// ---------------------------------------------------------------------------
+
+model PaymentReminder {
+  id             String         @id @default(uuid())
+  companyId      String
+  invoiceId      String
+  reminderType   ReminderType   @default(MANUAL)
+  /// Offset in days relative to the due date; negative = before, positive = after.
+  offsetDays     Int            @default(0)
+  scheduledFor   DateTime
+  sentAt         DateTime?
+  status         ReminderStatus @default(SCHEDULED)
+  recipientEmail String?
+  subject        String?
+  message        String?
+  failureReason  String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@index([companyId, status, scheduledFor])
+  @@map("payment_reminders")
+}
+
+model InvoiceActivity {
+  id          String       @id @default(uuid())
+  companyId   String
+  invoiceId   String
+  userId      String?
+  action      ActivityType
+  description String
+  metadata    Json?
+  ipAddress   String?
+  createdAt   DateTime     @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  user    User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([invoiceId, createdAt])
+  @@index([companyId, createdAt])
+  @@map("invoice_activities")
+}
+
+model InvoiceSettings {
+  id        String @id @default(uuid())
+  companyId String @unique
+
+  // Numbering
+  invoicePrefix       String          @default("INV")
+  invoiceSuffix       String?
+  creditNotePrefix    String          @default("CN")
+  debitNotePrefix     String          @default("DN")
+  numberSeparator     String          @default("-")
+  numberPadding       Int             @default(4)
+  startNumber         Int             @default(1)
+  resetMode           NumberResetMode @default(FINANCIAL_YEAR)
+  includeYearInNumber Boolean         @default(true)
+
+  // Defaults applied to new invoices
+  defaultDueDays  Int     @default(15)
+  defaultTaxRate  Decimal @default(18.00) @db.Decimal(5, 2)
+  defaultCurrency String  @default("INR")
+  defaultTerms    String?
+  defaultNotes    String?
+
+  // Document presentation
+  themeColor      String  @default("#7c4a27")
+  template        String  @default("classic")
+  showHsnColumn   Boolean @default(true)
+  showDiscount    Boolean @default(true)
+  showBankDetails Boolean @default(true)
+  showSignature   Boolean @default(true)
+  signatureUrl    String?
+  footerNote      String?
+
+  // Behaviour
+  enableRoundOff  Boolean @default(true)
+  autoMarkOverdue Boolean @default(true)
+
+  // Reminder defaults
+  remindersEnabled Boolean @default(false)
+  remindBeforeDays Int[]   @default([3])
+  remindOnDueDate  Boolean @default(true)
+  remindAfterDays  Int[]   @default([3, 7])
+  reminderCcEmails String?
+  reminderSubject  String?
+  reminderBody     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@map("invoice_settings")
+}
+
+model DocumentSequence {
+  id           String       @id @default(uuid())
+  companyId    String
+  documentType DocumentType
+  /// "ALL" when numbering never resets, otherwise the financial year / month key.
+  periodKey    String
+  nextNumber   Int          @default(1)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, documentType, periodKey])
+  @@map("document_sequences")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
 
 enum UserRole {
   OWNER
@@ -219,4 +571,75 @@ enum PaymentMethod {
   CHEQUE
   CARD
   OTHER
+}
+
+enum NoteType {
+  CREDIT
+  DEBIT
+}
+
+enum NoteStatus {
+  DRAFT
+  ISSUED
+  CANCELLED
+}
+
+enum RecurringFrequency {
+  DAILY
+  WEEKLY
+  MONTHLY
+  QUARTERLY
+  HALF_YEARLY
+  YEARLY
+}
+
+enum RecurringStatus {
+  ACTIVE
+  PAUSED
+  COMPLETED
+  CANCELLED
+}
+
+enum ReminderType {
+  BEFORE_DUE
+  ON_DUE_DATE
+  AFTER_DUE
+  MANUAL
+}
+
+enum ReminderStatus {
+  SCHEDULED
+  SENT
+  FAILED
+  CANCELLED
+}
+
+enum ActivityType {
+  CREATED
+  UPDATED
+  STATUS_CHANGED
+  SENT
+  VIEWED
+  PAYMENT_RECORDED
+  PAYMENT_DELETED
+  CANCELLED
+  DUPLICATED
+  PDF_DOWNLOADED
+  EMAIL_SENT
+  REMINDER_SENT
+  NOTE_LINKED
+  DELETED
+}
+
+enum NumberResetMode {
+  NEVER
+  YEARLY
+  MONTHLY
+  FINANCIAL_YEAR
+}
+
+enum DocumentType {
+  INVOICE
+  CREDIT_NOTE
+  DEBIT_NOTE
 }
