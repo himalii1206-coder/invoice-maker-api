@@ -3,22 +3,27 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 model User {
-  id           String    @id @default(uuid())
-  email        String    @unique
-  passwordHash String
-  firstName    String
-  lastName     String
-  role         UserRole  @default(OWNER)
-  isActive     Boolean   @default(true)
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
-  company      Company?
-  sessions     Session[]
+  id                       String    @id @default(uuid())
+  email                    String    @unique
+  passwordHash             String
+  firstName                String
+  lastName                 String
+  role                     UserRole  @default(OWNER)
+  isActive                 Boolean   @default(true)
+  isEmailVerified          Boolean   @default(false)
+  emailVerificationToken   String?   @unique
+  emailVerificationCode    String?
+  emailVerificationExpires DateTime?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+  company                  Company?
+  sessions                 Session[]
 
   @@map("users")
 }
@@ -89,6 +94,7 @@ model Customer {
   updatedAt  DateTime     @updatedAt
   company    Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
   invoices   Invoice[]
+  products   Product[]
 
   @@index([companyId])
   @@map("customers")
@@ -97,6 +103,7 @@ model Customer {
 model Product {
   id          String   @id @default(uuid())
   companyId   String
+  customerId  String
   name        String
   description String?
   sku         String?
@@ -108,8 +115,10 @@ model Product {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  customer    Customer @relation(fields: [customerId], references: [id])
 
   @@index([companyId])
+  @@index([customerId])
   @@map("products")
 }
 
