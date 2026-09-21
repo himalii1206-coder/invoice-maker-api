@@ -10,10 +10,23 @@ export interface CreateCustomerInput {
   type?: CustomerType;
   gstin?: string;
   address?: string;
+  factoryAddress?: string;
   city?: string;
   state?: string;
   country?: string;
   postalCode?: string;
+  officeNo?: string;
+  contactPerson?: string;
+  accountGroup?: string;
+  openingBalance?: number | Prisma.Decimal;
+  openingBalanceDate?: Date | string;
+  balanceType?: string;
+  partyCategory?: string;
+  narration1?: string;
+  narration2?: string;
+  bankName?: string;
+  accountNumber?: string;
+  ifscCode?: string;
   isActive?: boolean;
 }
 
@@ -25,9 +38,11 @@ export interface ListCustomersQuery {
   search?: string;
   type?: CustomerType;
   isActive?: boolean;
+  accountGroup?: string;
+  partyCategory?: string;
   city?: string;
   state?: string;
-  sortBy: 'name' | 'email' | 'city' | 'state' | 'createdAt' | 'updatedAt';
+  sortBy: 'name' | 'email' | 'city' | 'state' | 'accountGroup' | 'openingBalance' | 'createdAt' | 'updatedAt';
   sortOrder: 'asc' | 'desc';
 }
 
@@ -40,10 +55,23 @@ const customerSelect = {
   type: true,
   gstin: true,
   address: true,
+  factoryAddress: true,
   city: true,
   state: true,
   country: true,
   postalCode: true,
+  officeNo: true,
+  contactPerson: true,
+  accountGroup: true,
+  openingBalance: true,
+  openingBalanceDate: true,
+  balanceType: true,
+  partyCategory: true,
+  narration1: true,
+  narration2: true,
+  bankName: true,
+  accountNumber: true,
+  ifscCode: true,
   isActive: true,
   createdAt: true,
   updatedAt: true
@@ -56,12 +84,14 @@ export class CustomerService {
    * rather than merely forbidden.
    */
   static async list(companyId: string, query: ListCustomersQuery) {
-    const { page, limit, search, type, isActive, city, state, sortBy, sortOrder } = query;
+    const { page, limit, search, type, isActive, accountGroup, partyCategory, city, state, sortBy, sortOrder } = query;
 
     const where: Prisma.CustomerWhereInput = {
       companyId,
       ...(type && { type }),
       ...(isActive !== undefined && { isActive }),
+      ...(accountGroup && { accountGroup: { equals: accountGroup, mode: 'insensitive' } }),
+      ...(partyCategory && { partyCategory: { equals: partyCategory, mode: 'insensitive' } }),
       ...(city && { city: { equals: city, mode: 'insensitive' } }),
       ...(state && { state: { equals: state, mode: 'insensitive' } }),
       ...(search && {
@@ -69,9 +99,14 @@ export class CustomerService {
           { name: { contains: search, mode: 'insensitive' as const } },
           { email: { contains: search, mode: 'insensitive' as const } },
           { phone: { contains: search, mode: 'insensitive' as const } },
+          { officeNo: { contains: search, mode: 'insensitive' as const } },
           { gstin: { contains: search, mode: 'insensitive' as const } },
           { city: { contains: search, mode: 'insensitive' as const } },
-          { state: { contains: search, mode: 'insensitive' as const } }
+          { state: { contains: search, mode: 'insensitive' as const } },
+          { contactPerson: { contains: search, mode: 'insensitive' as const } },
+          { accountGroup: { contains: search, mode: 'insensitive' as const } },
+          { partyCategory: { contains: search, mode: 'insensitive' as const } },
+          { bankName: { contains: search, mode: 'insensitive' as const } }
         ]
       })
     };
@@ -132,10 +167,23 @@ export class CustomerService {
         type: input.type ?? 'BUSINESS',
         gstin: input.gstin ?? null,
         address: input.address ?? null,
+        factoryAddress: input.factoryAddress ?? null,
         city: input.city ?? null,
         state: input.state ?? null,
         country: input.country ?? 'India',
         postalCode: input.postalCode ?? null,
+        officeNo: input.officeNo ?? null,
+        contactPerson: input.contactPerson ?? null,
+        accountGroup: input.accountGroup ?? null,
+        openingBalance: input.openingBalance !== undefined ? input.openingBalance : 0,
+        openingBalanceDate: input.openingBalanceDate ? new Date(input.openingBalanceDate) : null,
+        balanceType: input.balanceType ?? null,
+        partyCategory: input.partyCategory ?? null,
+        narration1: input.narration1 ?? null,
+        narration2: input.narration2 ?? null,
+        bankName: input.bankName ?? null,
+        accountNumber: input.accountNumber ?? null,
+        ifscCode: input.ifscCode ?? null,
         isActive: input.isActive ?? true
       },
       select: customerSelect
@@ -151,7 +199,11 @@ export class CustomerService {
     const data: Prisma.CustomerUpdateInput = {};
     const assign = <K extends keyof UpdateCustomerInput>(key: K) => {
       if (key in input) {
-        (data as any)[key] = input[key] ?? null;
+        if (key === 'openingBalanceDate') {
+          data.openingBalanceDate = input.openingBalanceDate ? new Date(input.openingBalanceDate) : null;
+        } else {
+          (data as any)[key] = input[key] ?? null;
+        }
       }
     };
 
@@ -163,10 +215,23 @@ export class CustomerService {
         'type',
         'gstin',
         'address',
+        'factoryAddress',
         'city',
         'state',
         'country',
         'postalCode',
+        'officeNo',
+        'contactPerson',
+        'accountGroup',
+        'openingBalance',
+        'openingBalanceDate',
+        'balanceType',
+        'partyCategory',
+        'narration1',
+        'narration2',
+        'bankName',
+        'accountNumber',
+        'ifscCode',
         'isActive'
       ] as const
     ).forEach(assign);

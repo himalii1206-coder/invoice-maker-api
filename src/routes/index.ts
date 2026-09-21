@@ -6,6 +6,7 @@ import productRoutes from './product.js';
 import invoiceRoutes from './invoice.js';
 import paymentRoutes from './payment.js';
 import invoiceSettingsRoutes from './invoiceSettings.js';
+import reportRoutes from './report.js';
 
 const router = Router();
 
@@ -16,5 +17,6 @@ router.use('/products', productRoutes);
 router.use('/invoices', invoiceRoutes);
 router.use('/payments', paymentRoutes);
 router.use('/invoice-settings', invoiceSettingsRoutes);
+router.use('/reports', reportRoutes);
 
 export default router;

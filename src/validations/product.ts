@@ -13,47 +13,58 @@ const optionalText = (max: number, label: string) =>
     .transform((v) => (v === '' ? undefined : v));
 
 const productFields = {
-  customerId: z.string().uuid('Please select a valid customer'),
+  category: optionalText(100, 'Category'),
+  productCode: optionalText(50, 'Product code'),
   name: z
     .string()
     .trim()
-    .min(2, 'Product name must be at least 2 characters')
+    .min(1, 'Product name is required')
     .max(150, 'Product name must be at most 150 characters'),
-  description: optionalText(500, 'Description'),
-  sku: optionalText(50, 'SKU'),
-  price: z.coerce
-    .number({ invalid_type_error: 'Price must be a number' })
-    .min(0, 'Price cannot be negative')
-    .max(99999999.99, 'Price is too large'),
   unit: z
     .string()
     .trim()
     .min(1, 'Unit is required')
-    .max(20, 'Unit must be at most 20 characters'),
-  taxRate: z.coerce
-    .number({ invalid_type_error: 'Tax rate must be a number' })
-    .min(0, 'Tax rate cannot be negative')
-    .max(100, 'Tax rate cannot exceed 100'),
+    .max(20, 'Unit must be at most 20 characters')
+    .default('PCS'),
   hsnSacCode: z
     .string()
     .trim()
-    .regex(HSN_REGEX, 'HSN/SAC code must be 4 to 8 digits')
+    .regex(HSN_REGEX, 'HSN code must be 4 to 8 digits')
     .optional()
     .or(z.literal(''))
     .transform((v) => (v === '' ? undefined : v)),
+  price: z.coerce
+    .number({ invalid_type_error: 'Price must be a number' })
+    .min(0, 'Price cannot be negative')
+    .max(99999999.99, 'Price is too large'),
+  customerId: z
+    .string()
+    .uuid('Please select a valid customer')
+    .optional()
+    .or(z.literal(''))
+    .transform((v) => (v === '' ? undefined : v)),
+  description: optionalText(500, 'Description'),
+  sku: optionalText(50, 'SKU'),
+  taxRate: z.coerce
+    .number({ invalid_type_error: 'Tax rate must be a number' })
+    .min(0, 'Tax rate cannot be negative')
+    .max(100, 'Tax rate cannot exceed 100')
+    .optional(),
   isActive: z.boolean()
 };
 
 export const createProductSchema = z.object({
   body: z.object({
-    customerId: productFields.customerId,
+    category: productFields.category,
+    productCode: productFields.productCode,
     name: productFields.name,
+    unit: productFields.unit.optional(),
+    hsnSacCode: productFields.hsnSacCode,
+    price: productFields.price,
+    customerId: productFields.customerId,
     description: productFields.description,
     sku: productFields.sku,
-    price: productFields.price,
-    unit: productFields.unit.optional(),
     taxRate: productFields.taxRate.optional(),
-    hsnSacCode: productFields.hsnSacCode,
     isActive: productFields.isActive.optional()
   })
 });
@@ -64,14 +75,16 @@ export const updateProductSchema = z.object({
   }),
   body: z
     .object({
-      customerId: productFields.customerId.optional(),
+      category: productFields.category,
+      productCode: productFields.productCode,
       name: productFields.name.optional(),
+      unit: productFields.unit.optional(),
+      hsnSacCode: productFields.hsnSacCode,
+      price: productFields.price.optional(),
+      customerId: productFields.customerId,
       description: productFields.description,
       sku: productFields.sku,
-      price: productFields.price.optional(),
-      unit: productFields.unit.optional(),
       taxRate: productFields.taxRate.optional(),
-      hsnSacCode: productFields.hsnSacCode,
       isActive: productFields.isActive.optional()
     })
     .refine((data) => Object.keys(data).length > 0, {
@@ -107,6 +120,7 @@ export const listProductsSchema = z.object({
       .max(100, 'Limit cannot exceed 100')
       .default(10),
     search: z.string().trim().max(150).optional(),
+    category: z.string().trim().max(100).optional(),
     customerId: z.string().uuid('Invalid customer id').optional(),
     isActive: z
       .enum(['true', 'false'])
@@ -115,7 +129,7 @@ export const listProductsSchema = z.object({
     minPrice: z.coerce.number().min(0).optional(),
     maxPrice: z.coerce.number().min(0).optional(),
     sortBy: z
-      .enum(['name', 'price', 'taxRate', 'sku', 'createdAt', 'updatedAt'])
+      .enum(['name', 'price', 'taxRate', 'sku', 'productCode', 'category', 'createdAt', 'updatedAt'])
       .default('createdAt'),
     sortOrder: z.enum(['asc', 'desc']).default('desc')
   })

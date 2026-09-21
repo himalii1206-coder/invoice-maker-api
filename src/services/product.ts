@@ -4,7 +4,9 @@ import { AppError } from '../utils/error.js';
 import { PaginationMeta } from '../types/index.js';
 
 export interface CreateProductInput {
-  customerId: string;
+  customerId?: string;
+  category?: string;
+  productCode?: string;
   name: string;
   description?: string;
   sku?: string;
@@ -21,17 +23,20 @@ export interface ListProductsQuery {
   page: number;
   limit: number;
   search?: string;
+  category?: string;
   customerId?: string;
   isActive?: boolean;
   minPrice?: number;
   maxPrice?: number;
-  sortBy: 'name' | 'price' | 'taxRate' | 'sku' | 'createdAt' | 'updatedAt';
+  sortBy: 'name' | 'price' | 'taxRate' | 'sku' | 'productCode' | 'category' | 'createdAt' | 'updatedAt';
   sortOrder: 'asc' | 'desc';
 }
 
 /** Shape returned to clients - keeps responses consistent across endpoints. */
 const productSelect = {
   id: true,
+  category: true,
+  productCode: true,
   name: true,
   description: true,
   sku: true,
@@ -58,6 +63,7 @@ export class ProductService {
       page,
       limit,
       search,
+      category,
       customerId,
       isActive,
       minPrice,
@@ -69,6 +75,7 @@ export class ProductService {
     const where: Prisma.ProductWhereInput = {
       companyId,
       ...(customerId && { customerId }),
+      ...(category && { category: { equals: category, mode: 'insensitive' as const } }),
       ...(isActive !== undefined && { isActive }),
       ...((minPrice !== undefined || maxPrice !== undefined) && {
         price: {
@@ -79,6 +86,8 @@ export class ProductService {
       ...(search && {
         OR: [
           { name: { contains: search, mode: 'insensitive' as const } },
+          { productCode: { contains: search, mode: 'insensitive' as const } },
+          { category: { contains: search, mode: 'insensitive' as const } },
           { description: { contains: search, mode: 'insensitive' as const } },
           { sku: { contains: search, mode: 'insensitive' as const } },
           { hsnSacCode: { contains: search, mode: 'insensitive' as const } },
@@ -128,16 +137,21 @@ export class ProductService {
   }
 
   static async create(companyId: string, input: CreateProductInput) {
-    await this.assertCustomerBelongsToCompany(companyId, input.customerId);
-    await this.assertSkuIsFree(companyId, input.sku);
+    if (input.customerId) {
+      await this.assertCustomerBelongsToCompany(companyId, input.customerId);
+    }
+    const code = input.productCode || input.sku;
+    await this.assertCodeIsFree(companyId, code);
 
     return prisma.product.create({
       data: {
         companyId,
-        customerId: input.customerId,
+        customerId: input.customerId ?? null,
+        category: input.category || 'General',
+        productCode: input.productCode ?? input.sku ?? null,
         name: input.name,
         description: input.description ?? null,
-        sku: input.sku ?? null,
+        sku: input.sku ?? input.productCode ?? null,
         price: input.price,
         unit: input.unit ?? 'PCS',
         taxRate: input.taxRate ?? 18,
@@ -154,7 +168,10 @@ export class ProductService {
     if (input.customerId) {
       await this.assertCustomerBelongsToCompany(companyId, input.customerId);
     }
-    await this.assertSkuIsFree(companyId, input.sku, id);
+    const code = input.productCode || input.sku;
+    if (code) {
+      await this.assertCodeIsFree(companyId, code, id);
+    }
 
     // Only touch keys the caller actually sent, so a partial update never wipes
     // fields it did not mention.
@@ -167,6 +184,8 @@ export class ProductService {
 
     (
       [
+        'category',
+        'productCode',
         'name',
         'description',
         'sku',
@@ -178,6 +197,13 @@ export class ProductService {
       ] as const
     ).forEach(assign);
 
+    if (input.productCode && !input.sku) {
+      data.sku = input.productCode;
+    }
+    if (input.sku && !input.productCode) {
+      data.productCode = input.sku;
+    }
+
     // These columns are non-nullable in the schema; drop them if cleared.
     if (data.name === null) delete (data as any).name;
     if (data.price === null) delete (data as any).price;
@@ -185,8 +211,12 @@ export class ProductService {
     if (data.taxRate === null) delete (data as any).taxRate;
     if (data.isActive === null) delete (data as any).isActive;
 
-    if (input.customerId) {
-      data.customer = { connect: { id: input.customerId } };
+    if (input.customerId !== undefined) {
+      if (input.customerId) {
+        data.customer = { connect: { id: input.customerId } };
+      } else {
+        data.customer = { disconnect: true };
+      }
     }
 
     return prisma.product.update({
@@ -243,21 +273,25 @@ export class ProductService {
     return customer;
   }
 
-  /** SKUs are unique per business when provided, not globally. */
-  private static async assertSkuIsFree(companyId: string, sku?: string, excludeId?: string) {
-    if (!sku) return;
+  /** Product code or SKU uniqueness per business */
+  private static async assertCodeIsFree(companyId: string, code?: string, excludeId?: string) {
+    if (!code) return;
 
     const duplicate = await prisma.product.findFirst({
       where: {
         companyId,
-        sku: { equals: sku, mode: 'insensitive' },
+        OR: [
+          { productCode: { equals: code, mode: 'insensitive' } },
+          { sku: { equals: code, mode: 'insensitive' } }
+        ],
         ...(excludeId && { NOT: { id: excludeId } })
       },
       select: { id: true }
     });
 
     if (duplicate) {
-      throw AppError.conflict('A product with this SKU already exists in your business');
+      throw AppError.conflict('A product with this Product Code / SKU already exists in your business');
     }
   }
 }
+

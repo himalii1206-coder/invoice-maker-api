@@ -88,50 +88,66 @@ model Company {
 }
 
 model Customer {
-  id         String             @id @default(uuid())
-  companyId  String
-  name       String
-  email      String?
-  phone      String?
-  type       CustomerType       @default(BUSINESS)
-  gstin      String?
-  address    String?
-  city       String?
-  state      String?
-  country    String             @default("India")
-  postalCode String?
-  isActive   Boolean            @default(true)
-  createdAt  DateTime           @default(now())
-  updatedAt  DateTime           @updatedAt
-  company    Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  invoices   Invoice[]
-  products   Product[]
-  notes      CreditDebitNote[]
-  recurring  RecurringInvoice[]
+  id                 String             @id @default(uuid())
+  companyId          String
+  name               String
+  email              String?
+  phone              String?
+  type               CustomerType       @default(BUSINESS)
+  gstin              String?
+  address            String?
+  factoryAddress     String?
+  city               String?
+  state              String?
+  country            String             @default("India")
+  postalCode         String?
+  officeNo           String?
+  contactPerson      String?
+  accountGroup       String?
+  openingBalance     Decimal?           @default(0.00) @db.Decimal(14, 2)
+  openingBalanceDate DateTime?
+  balanceType        String?
+  partyCategory      String?
+  narration1         String?
+  narration2         String?
+  bankName           String?
+  accountNumber      String?
+  ifscCode           String?
+  isActive           Boolean            @default(true)
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  company            Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  invoices           Invoice[]
+  products           Product[]
+  notes              CreditDebitNote[]
+  recurring          RecurringInvoice[]
 
   @@index([companyId])
   @@map("customers")
 }
 
 model Product {
-  id          String   @id @default(uuid())
+  id          String    @id @default(uuid())
   companyId   String
-  customerId  String
+  customerId  String?
+  category    String?   @default("General")
+  productCode String?
   name        String
   description String?
   sku         String?
-  price       Decimal  @db.Decimal(12, 2)
-  unit        String   @default("PCS")
-  taxRate     Decimal  @default(18.00) @db.Decimal(5, 2)
+  price       Decimal   @db.Decimal(12, 2)
+  unit        String    @default("PCS")
+  taxRate     Decimal   @default(18.00) @db.Decimal(5, 2)
   hsnSacCode  String?
-  isActive    Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  customer    Customer @relation(fields: [customerId], references: [id])
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  company     Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  customer    Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
 
   @@index([companyId])
   @@index([customerId])
+  @@index([companyId, category])
   @@map("products")
 }
 
