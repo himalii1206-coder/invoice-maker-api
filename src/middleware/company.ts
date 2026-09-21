@@ -19,13 +19,37 @@ export const resolveCompany = async (
       throw AppError.unauthorized('Authentication is required');
     }
 
-    const company = await prisma.company.findUnique({
+    let company = await prisma.company.findUnique({
       where: { userId: req.user.userId },
       select: { id: true }
     });
 
     if (!company) {
-      throw AppError.notFound('No business profile found for this account');
+      // Find the user to get their business/personal name
+      const user = await prisma.user.findUnique({
+        where: { id: req.user.userId },
+        select: { id: true, firstName: true, lastName: true, email: true }
+      });
+
+      if (!user) {
+        throw AppError.unauthorized('User account not found');
+      }
+
+      const businessName =
+        `${user.firstName || ''} ${user.lastName || ''}`.trim() ||
+        user.email.split('@')[0] ||
+        'My Business';
+
+      company = await prisma.company.create({
+        data: {
+          userId: user.id,
+          name: businessName,
+          invoicePrefix: 'INV-',
+          nextInvoiceNumber: 1001,
+          country: 'India'
+        },
+        select: { id: true }
+      });
     }
 
     req.companyId = company.id;

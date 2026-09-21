@@ -103,6 +103,24 @@ export class AuthService {
       ipAddress: input.ipAddress
     });
 
+    let company = user.company;
+    if (!company) {
+      const businessName =
+        `${user.firstName || ''} ${user.lastName || ''}`.trim() ||
+        user.email.split('@')[0] ||
+        'My Business';
+
+      company = await prisma.company.create({
+        data: {
+          userId: user.id,
+          name: businessName,
+          invoicePrefix: 'INV-',
+          nextInvoiceNumber: 1001,
+          country: 'India'
+        }
+      });
+    }
+
     return {
       user: {
         id: user.id,
@@ -111,13 +129,11 @@ export class AuthService {
         lastName: user.lastName,
         role: user.role
       },
-      company: user.company
-        ? {
-            id: user.company.id,
-            name: user.company.name,
-            invoicePrefix: user.company.invoicePrefix
-          }
-        : null,
+      company: {
+        id: company.id,
+        name: company.name,
+        invoicePrefix: company.invoicePrefix
+      },
       ...tokens
     };
   }
@@ -159,6 +175,24 @@ export class AuthService {
       meta
     );
 
+    let company = session.user.company;
+    if (!company) {
+      const businessName =
+        `${session.user.firstName || ''} ${session.user.lastName || ''}`.trim() ||
+        session.user.email.split('@')[0] ||
+        'My Business';
+
+      company = await prisma.company.create({
+        data: {
+          userId: session.user.id,
+          name: businessName,
+          invoicePrefix: 'INV-',
+          nextInvoiceNumber: 1001,
+          country: 'India'
+        }
+      });
+    }
+
     return {
       user: {
         id: session.user.id,
@@ -167,13 +201,11 @@ export class AuthService {
         lastName: session.user.lastName,
         role: session.user.role
       },
-      company: session.user.company
-        ? {
-            id: session.user.company.id,
-            name: session.user.company.name,
-            invoicePrefix: session.user.company.invoicePrefix
-          }
-        : null,
+      company: {
+        id: company.id,
+        name: company.name,
+        invoicePrefix: company.invoicePrefix
+      },
       ...tokens
     };
   }
@@ -195,7 +227,7 @@ export class AuthService {
   }
 
   static async getCurrentUser(userId: string) {
-    const user = await prisma.user.findUnique({
+    let user = await prisma.user.findUnique({
       where: { id: userId },
       select: {
         id: true,
@@ -210,6 +242,28 @@ export class AuthService {
 
     if (!user) {
       throw AppError.notFound('User not found');
+    }
+
+    if (!user.company) {
+      const businessName =
+        `${user.firstName || ''} ${user.lastName || ''}`.trim() ||
+        user.email.split('@')[0] ||
+        'My Business';
+
+      const company = await prisma.company.create({
+        data: {
+          userId: user.id,
+          name: businessName,
+          invoicePrefix: 'INV-',
+          nextInvoiceNumber: 1001,
+          country: 'India'
+        }
+      });
+
+      user = {
+        ...user,
+        company
+      };
     }
 
     return user;
