@@ -29,6 +29,15 @@ const dateField = (label: string) =>
     .min(1, `${label} is required`)
     .refine((value) => !Number.isNaN(new Date(value).getTime()), `${label} must be a valid date`);
 
+const optionalDateField = (label: string) =>
+  z
+    .string()
+    .trim()
+    .optional()
+    .or(z.literal(''))
+    .refine((value) => !value || !Number.isNaN(new Date(value).getTime()), `${label} must be a valid date`)
+    .transform((v) => (v ? v : undefined));
+
 const uuid = (label: string) => z.string().uuid(`Invalid ${label}`);
 
 export const invoiceItemSchema = z.object({
@@ -70,10 +79,20 @@ export const invoiceItemSchema = z.object({
 const invoiceBodyFields = {
   customerId: uuid('customer'),
   invoiceNumber: optionalText(50, 'Invoice number'),
+  billType: optionalText(50, 'Bill type'),
   issueDate: dateField('Issue date'),
   dueDate: dateField('Due date'),
-  poNumber: optionalText(50, 'PO number'),
+  poNumber: optionalText(50, 'Order / PO number'),
+  orderDate: optionalDateField('Order date'),
+  challanNo: optionalText(50, 'Challan number'),
+  challanDate: optionalDateField('Challan date'),
   reference: optionalText(100, 'Reference'),
+  modeOfDispatch: optionalText(100, 'Mode of dispatch'),
+  lhNo: optionalText(50, 'LH number'),
+  lhDate: optionalDateField('LH date'),
+  dcNo: optionalText(50, 'Your D.C. number'),
+  dcDate: optionalDateField('Your D.C. date'),
+  paymentTerms: optionalText(100, 'Payment terms'),
   currency: z.string().trim().length(3, 'Currency must be a 3 letter code').optional(),
   placeOfSupply: optionalText(80, 'Place of supply'),
   isReverseCharge: z.boolean().optional(),
@@ -91,10 +110,20 @@ export const createInvoiceSchema = z.object({
   body: z.object({
     customerId: invoiceBodyFields.customerId,
     invoiceNumber: invoiceBodyFields.invoiceNumber,
+    billType: invoiceBodyFields.billType,
     issueDate: invoiceBodyFields.issueDate.optional(),
     dueDate: invoiceBodyFields.dueDate.optional(),
     poNumber: invoiceBodyFields.poNumber,
+    orderDate: invoiceBodyFields.orderDate,
+    challanNo: invoiceBodyFields.challanNo,
+    challanDate: invoiceBodyFields.challanDate,
     reference: invoiceBodyFields.reference,
+    modeOfDispatch: invoiceBodyFields.modeOfDispatch,
+    lhNo: invoiceBodyFields.lhNo,
+    lhDate: invoiceBodyFields.lhDate,
+    dcNo: invoiceBodyFields.dcNo,
+    dcDate: invoiceBodyFields.dcDate,
+    paymentTerms: invoiceBodyFields.paymentTerms,
     currency: invoiceBodyFields.currency,
     placeOfSupply: invoiceBodyFields.placeOfSupply,
     isReverseCharge: invoiceBodyFields.isReverseCharge,
@@ -111,10 +140,20 @@ export const updateInvoiceSchema = z.object({
   body: z
     .object({
       customerId: invoiceBodyFields.customerId.optional(),
+      billType: invoiceBodyFields.billType,
       issueDate: invoiceBodyFields.issueDate.optional(),
       dueDate: invoiceBodyFields.dueDate.optional(),
       poNumber: invoiceBodyFields.poNumber,
+      orderDate: invoiceBodyFields.orderDate,
+      challanNo: invoiceBodyFields.challanNo,
+      challanDate: invoiceBodyFields.challanDate,
       reference: invoiceBodyFields.reference,
+      modeOfDispatch: invoiceBodyFields.modeOfDispatch,
+      lhNo: invoiceBodyFields.lhNo,
+      lhDate: invoiceBodyFields.lhDate,
+      dcNo: invoiceBodyFields.dcNo,
+      dcDate: invoiceBodyFields.dcDate,
+      paymentTerms: invoiceBodyFields.paymentTerms,
       currency: invoiceBodyFields.currency,
       placeOfSupply: invoiceBodyFields.placeOfSupply,
       isReverseCharge: invoiceBodyFields.isReverseCharge,
@@ -175,6 +214,7 @@ export const listInvoicesSchema = z.object({
       .default(10),
     search: z.string().trim().max(150).optional(),
     status: statusListParam,
+    billType: z.string().trim().optional(),
     customerId: z.string().uuid('Invalid customer id').optional(),
     financialYear: z
       .string()
@@ -185,6 +225,8 @@ export const listInvoicesSchema = z.object({
     month: z.coerce.number().int().min(1, 'Month must be 1-12').max(12, 'Month must be 1-12').optional(),
     dateFrom: z.string().trim().optional(),
     dateTo: z.string().trim().optional(),
+    startDate: z.string().trim().optional(),
+    endDate: z.string().trim().optional(),
     minAmount: z.coerce.number().min(0).optional(),
     maxAmount: z.coerce.number().min(0).optional(),
     onlyOutstanding: z

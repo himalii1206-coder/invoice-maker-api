@@ -38,10 +38,20 @@ export interface CreateInvoiceInput {
   customerId: string;
   /** Optional manual override; omitted means allocate from the sequence. */
   invoiceNumber?: string;
+  billType?: string;
   issueDate?: string | Date;
   dueDate?: string | Date;
   poNumber?: string | null;
+  orderDate?: string | Date | null;
+  challanNo?: string | null;
+  challanDate?: string | Date | null;
   reference?: string | null;
+  modeOfDispatch?: string | null;
+  lhNo?: string | null;
+  lhDate?: string | Date | null;
+  dcNo?: string | null;
+  dcDate?: string | Date | null;
+  paymentTerms?: string | null;
   currency?: string;
   placeOfSupply?: string | null;
   isReverseCharge?: boolean;
@@ -96,12 +106,15 @@ export interface ListInvoicesQuery {
   limit: number;
   search?: string;
   status?: InvoiceStatus[];
+  billType?: string;
   customerId?: string;
   financialYear?: string;
   year?: number;
   month?: number;
   dateFrom?: string;
   dateTo?: string;
+  startDate?: string;
+  endDate?: string;
   minAmount?: number;
   maxAmount?: number;
   /** Only invoices with money still outstanding. */
@@ -115,6 +128,7 @@ const invoiceListSelect = {
   id: true,
   invoiceNumber: true,
   status: true,
+  billType: true,
   issueDate: true,
   dueDate: true,
   financialYear: true,
@@ -137,6 +151,16 @@ const invoiceListSelect = {
   creditNoteTotal: true,
   debitNoteTotal: true,
   balanceDue: true,
+  poNumber: true,
+  orderDate: true,
+  challanNo: true,
+  challanDate: true,
+  modeOfDispatch: true,
+  lhNo: true,
+  lhDate: true,
+  dcNo: true,
+  dcDate: true,
+  paymentTerms: true,
   sentAt: true,
   paidAt: true,
   cancelledAt: true,
@@ -504,7 +528,7 @@ export class InvoiceService {
       status: { in: COUNTED_STATUSES }
     };
 
-    const [all, paid, outstanding, overdue, draft, unpaid, statusGroups] = await prisma.$transaction([
+    const [all, paid, outstanding, overdue, draft, unpaid, statusGroups, taxAgg, recentInvoicesList, recentAllInvoices] = await prisma.$transaction([
       prisma.invoice.aggregate({
         where: counted,
         _sum: { grandTotal: true, amountPaid: true, balanceDue: true, taxAmount: true },
@@ -540,6 +564,47 @@ export class InvoiceService {
         orderBy: { status: 'asc' },
         _count: true,
         _sum: { grandTotal: true, balanceDue: true }
+      }),
+      prisma.invoice.aggregate({
+        where: scope,
+        _sum: {
+          cgstAmount: true,
+          sgstAmount: true,
+          igstAmount: true,
+          taxAmount: true,
+          taxableAmount: true,
+          subtotal: true
+        }
+      }),
+      prisma.invoice.findMany({
+        where: scope,
+        orderBy: { createdAt: 'desc' },
+        take: 6,
+        select: {
+          id: true,
+          invoiceNumber: true,
+          billingName: true,
+          grandTotal: true,
+          balanceDue: true,
+          amountPaid: true,
+          status: true,
+          billType: true,
+          issueDate: true,
+          dueDate: true,
+          customer: { select: { id: true, name: true, city: true, state: true } }
+        }
+      }),
+      prisma.invoice.findMany({
+        where: scope,
+        select: {
+          id: true,
+          customerId: true,
+          billingName: true,
+          grandTotal: true,
+          amountPaid: true,
+          issueDate: true,
+          status: true
+        }
       })
     ]);
 
@@ -552,6 +617,67 @@ export class InvoiceService {
         balanceDue: round2(row?._sum?.balanceDue ?? 0)
       };
     });
+
+    // Generate monthly revenue trends for last 6 calendar months
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const now = new Date();
+    const monthlyTrends: { month: string; year: number; invoiced: number; collected: number; count: number }[] = [];
+
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
+      const mIdx = d.getUTCMonth();
+      const y = d.getUTCFullYear();
+      const label = `${monthNames[mIdx]} ${y}`;
+
+      const invoicesInMonth = recentAllInvoices.filter((inv) => {
+        const invDate = new Date(inv.issueDate);
+        return invDate.getUTCFullYear() === y && invDate.getUTCMonth() === mIdx;
+      });
+
+      const invoiced = round2(
+        invoicesInMonth.reduce(
+          (acc, inv) => acc + (inv.status !== InvoiceStatus.CANCELLED ? toNumber(inv.grandTotal) : 0),
+          0
+        )
+      );
+      const collected = round2(
+        invoicesInMonth.reduce((acc, inv) => acc + toNumber(inv.amountPaid), 0)
+      );
+
+      monthlyTrends.push({
+        month: label,
+        year: y,
+        invoiced,
+        collected,
+        count: invoicesInMonth.length
+      });
+    }
+
+    // Top 5 Customers by revenue
+    const customerMap = new Map<
+      string,
+      { customerId: string; name: string; totalInvoiced: number; totalPaid: number; count: number }
+    >();
+
+    for (const inv of recentAllInvoices) {
+      if (inv.status === InvoiceStatus.CANCELLED) continue;
+      const key = inv.customerId || inv.billingName;
+      const existing = customerMap.get(key) || {
+        customerId: inv.customerId,
+        name: inv.billingName || 'Unknown Customer',
+        totalInvoiced: 0,
+        totalPaid: 0,
+        count: 0
+      };
+      existing.totalInvoiced = round2(existing.totalInvoiced + toNumber(inv.grandTotal));
+      existing.totalPaid = round2(existing.totalPaid + toNumber(inv.amountPaid));
+      existing.count += 1;
+      customerMap.set(key, existing);
+    }
+
+    const topCustomers = Array.from(customerMap.values())
+      .sort((a, b) => b.totalInvoiced - a.totalInvoiced)
+      .slice(0, 5);
 
     return {
       totalInvoices: all._count,
@@ -569,7 +695,17 @@ export class InvoiceService {
       overdueInvoices: overdue._count,
       draftAmount: round2(draft._sum.grandTotal ?? 0),
       draftInvoices: draft._count,
-      byStatus
+      byStatus,
+      recentInvoices: recentInvoicesList,
+      monthlyTrends,
+      topCustomers,
+      gstSummary: {
+        cgst: round2(taxAgg._sum.cgstAmount ?? 0),
+        sgst: round2(taxAgg._sum.sgstAmount ?? 0),
+        igst: round2(taxAgg._sum.igstAmount ?? 0),
+        taxableAmount: round2(taxAgg._sum.taxableAmount ?? 0),
+        totalTax: round2(taxAgg._sum.taxAmount ?? 0)
+      }
     };
   }
 
@@ -577,12 +713,15 @@ export class InvoiceService {
     const {
       search,
       status,
+      billType,
       customerId,
       financialYear,
       year,
       month,
       dateFrom,
       dateTo,
+      startDate,
+      endDate,
       minAmount,
       maxAmount,
       onlyOutstanding
@@ -592,12 +731,15 @@ export class InvoiceService {
     // current calendar year rather than silently ignoring it.
     const resolvedYear = month && !year ? new Date().getUTCFullYear() : year;
 
+    const effectiveDateFrom = dateFrom || startDate;
+    const effectiveDateTo = dateTo || endDate;
+
     let issueDate: Prisma.DateTimeFilter | undefined;
 
-    if (dateFrom || dateTo) {
+    if (effectiveDateFrom || effectiveDateTo) {
       issueDate = {
-        ...(dateFrom && { gte: startOfDay(dateFrom) }),
-        ...(dateTo && { lte: endOfDay(dateTo) })
+        ...(effectiveDateFrom && { gte: startOfDay(effectiveDateFrom) }),
+        ...(effectiveDateTo && { lte: endOfDay(effectiveDateTo) })
       };
     } else if (resolvedYear && month) {
       issueDate = {
@@ -614,6 +756,7 @@ export class InvoiceService {
     return {
       companyId,
       ...(status?.length && { status: { in: status } }),
+      ...(billType && { billType: { equals: billType, mode: 'insensitive' as const } }),
       ...(customerId && { customerId }),
       ...(financialYear && { financialYear }),
       ...(issueDate && { issueDate }),
@@ -633,7 +776,11 @@ export class InvoiceService {
           { billingName: { contains: search, mode: 'insensitive' as const } },
           { billingGstin: { contains: search, mode: 'insensitive' as const } },
           { poNumber: { contains: search, mode: 'insensitive' as const } },
+          { challanNo: { contains: search, mode: 'insensitive' as const } },
           { reference: { contains: search, mode: 'insensitive' as const } },
+          { modeOfDispatch: { contains: search, mode: 'insensitive' as const } },
+          { lhNo: { contains: search, mode: 'insensitive' as const } },
+          { dcNo: { contains: search, mode: 'insensitive' as const } },
           { customer: { name: { contains: search, mode: 'insensitive' as const } } },
           { customer: { email: { contains: search, mode: 'insensitive' as const } } }
         ]
@@ -677,102 +824,112 @@ export class InvoiceService {
 
     const status = input.status === InvoiceStatus.SENT ? InvoiceStatus.SENT : InvoiceStatus.DRAFT;
 
-    const created = await prisma.$transaction(async (tx) => {
-      const numbering = input.invoiceNumber
-        ? await this.useManualNumber(tx, companyId, input.invoiceNumber, issueDate)
-        : await NumberingService.allocate(tx, companyId, DocumentType.INVOICE, issueDate);
+    const created = await prisma.$transaction(
+      async (tx) => {
+        const numbering = input.invoiceNumber
+          ? await this.useManualNumber(tx, companyId, input.invoiceNumber, issueDate)
+          : await NumberingService.allocate(tx, companyId, DocumentType.INVOICE, issueDate);
 
-      const invoice = await tx.invoice.create({
-        data: {
-          companyId,
-          customerId: customer.id,
-          invoiceNumber: numbering.number,
-          sequenceNo: numbering.sequenceNo,
-          financialYear: numbering.financialYear,
-          status,
-          issueDate,
-          dueDate,
-          poNumber: input.poNumber ?? null,
-          reference: input.reference ?? null,
-          currency: input.currency ?? settings.defaultCurrency,
+        const invoice = await tx.invoice.create({
+          data: {
+            companyId,
+            customerId: customer.id,
+            invoiceNumber: numbering.number,
+            sequenceNo: numbering.sequenceNo,
+            financialYear: numbering.financialYear,
+            status,
+            billType: input.billType ?? 'TAX_INVOICE',
+            issueDate,
+            dueDate,
+            poNumber: input.poNumber ?? null,
+            orderDate: input.orderDate ? startOfDay(input.orderDate) : null,
+            challanNo: input.challanNo ?? null,
+            challanDate: input.challanDate ? startOfDay(input.challanDate) : null,
+            reference: input.reference ?? null,
+            modeOfDispatch: input.modeOfDispatch ?? null,
+            lhNo: input.lhNo ?? null,
+            lhDate: input.lhDate ? startOfDay(input.lhDate) : null,
+            dcNo: input.dcNo ?? null,
+            dcDate: input.dcDate ? startOfDay(input.dcDate) : null,
+            paymentTerms: input.paymentTerms ?? null,
+            currency: input.currency ?? settings.defaultCurrency,
 
-          // Snapshot the buyer so a later edit to the customer record cannot
-          // rewrite an already-issued document.
-          billingName: customer.name,
-          billingEmail: customer.email,
-          billingPhone: customer.phone,
-          billingGstin: customer.gstin,
-          billingAddress: customer.address,
-          billingCity: customer.city,
-          billingState: customer.state,
-          billingCountry: customer.country ?? 'India',
-          billingPostalCode: customer.postalCode,
+            // Snapshot the buyer so a later edit to the customer record cannot
+            // rewrite an already-issued document.
+            billingName: customer.name,
+            billingEmail: customer.email,
+            billingPhone: customer.phone,
+            billingGstin: customer.gstin,
+            billingAddress: customer.address,
+            billingCity: customer.city,
+            billingState: customer.state,
+            billingCountry: customer.country ?? 'India',
+            billingPostalCode: customer.postalCode,
 
-          placeOfSupply: supply.placeOfSupply,
-          placeOfSupplyCode: supply.placeOfSupplyCode,
-          isIgst: supply.isIgst,
-          isReverseCharge: input.isReverseCharge ?? false,
+            placeOfSupply: supply.placeOfSupply,
+            placeOfSupplyCode: supply.placeOfSupplyCode,
+            isIgst: supply.isIgst,
+            isReverseCharge: input.isReverseCharge ?? false,
 
-          subtotal: computed.subtotal,
-          discountAmount: computed.discountAmount,
-          taxableAmount: computed.taxableAmount,
-          taxAmount: computed.taxAmount,
-          cgstAmount: computed.cgstAmount,
-          sgstAmount: computed.sgstAmount,
-          igstAmount: computed.igstAmount,
-          roundOff: computed.roundOff,
-          grandTotal: computed.grandTotal,
-          amountPaid: 0,
-          balanceDue: computed.grandTotal,
+            subtotal: computed.subtotal,
+            discountAmount: computed.discountAmount,
+            taxableAmount: computed.taxableAmount,
+            taxAmount: computed.taxAmount,
+            cgstAmount: computed.cgstAmount,
+            sgstAmount: computed.sgstAmount,
+            igstAmount: computed.igstAmount,
+            roundOff: computed.roundOff,
+            grandTotal: computed.grandTotal,
+            amountPaid: 0,
+            balanceDue: computed.grandTotal,
 
-          notes: input.notes ?? settings.defaultNotes,
-          terms: input.terms ?? settings.defaultTerms,
-          internalNotes: input.internalNotes ?? null,
-          sentAt: status === InvoiceStatus.SENT ? new Date() : null,
+            notes: input.notes ?? settings.defaultNotes,
+            terms: input.terms ?? settings.defaultTerms,
+            internalNotes: input.internalNotes ?? null,
+            sentAt: status === InvoiceStatus.SENT ? new Date() : null,
 
-          items: {
-            create: computed.lines.map((line, index) => ({
-              productId: line.productId ?? null,
-              name: line.name,
-              description: line.description ?? null,
-              hsnSacCode: line.hsnSacCode ?? null,
-              unit: line.unit ?? 'PCS',
-              sortOrder: index,
-              quantity: line.quantity,
-              unitPrice: line.unitPrice,
-              discountPercent: line.discountPercent,
-              discountAmount: line.discountAmount,
-              taxRate: line.taxRate,
-              subtotal: line.subtotal,
-              taxableAmount: line.taxableAmount,
-              cgstRate: line.cgstRate,
-              cgstAmount: line.cgstAmount,
-              sgstRate: line.sgstRate,
-              sgstAmount: line.sgstAmount,
-              igstRate: line.igstRate,
-              igstAmount: line.igstAmount,
-              taxAmount: line.taxAmount,
-              total: line.total
-            }))
-          }
-        },
-        select: { id: true, invoiceNumber: true, grandTotal: true }
-      });
+            items: {
+              create: computed.lines.map((line, index) => ({
+                productId: line.productId ?? null,
+                name: line.name,
+                description: line.description ?? null,
+                hsnSacCode: line.hsnSacCode ?? null,
+                unit: line.unit ?? 'PCS',
+                sortOrder: index,
+                quantity: line.quantity,
+                unitPrice: line.unitPrice,
+                discountPercent: line.discountPercent,
+                discountAmount: line.discountAmount,
+                taxRate: line.taxRate,
+                subtotal: line.subtotal,
+                taxableAmount: line.taxableAmount,
+                cgstRate: line.cgstRate,
+                cgstAmount: line.cgstAmount,
+                sgstRate: line.sgstRate,
+                sgstAmount: line.sgstAmount,
+                igstRate: line.igstRate,
+                igstAmount: line.igstAmount,
+                taxAmount: line.taxAmount,
+                total: line.total
+              }))
+            }
+          },
+          select: { id: true, invoiceNumber: true, grandTotal: true }
+        });
 
-      await ActivityService.log(
-        {
-          companyId,
-          invoiceId: invoice.id,
-          userId: context.userId,
-          action: ActivityType.CREATED,
-          description: `Invoice ${invoice.invoiceNumber} created as ${status.toLowerCase()}`,
-          metadata: { grandTotal: computed.grandTotal, itemCount: computed.lines.length },
-          ipAddress: context.ipAddress
-        },
-        tx
-      );
+        return invoice;
+      },
+      { maxWait: 10000, timeout: 30000 }
+    );
 
-      return invoice;
+    await ActivityService.log({
+      companyId,
+      invoiceId: created.id,
+      userId: context.userId,
+      action: ActivityType.CREATED,
+      description: `Invoice ${created.invoiceNumber} created as ${status.toLowerCase()}`,
+      metadata: { grandTotal: computed.grandTotal, itemCount: computed.lines.length },
+      ipAddress: context.ipAddress
     });
 
     return this.getById(companyId, created.id);
@@ -829,8 +986,18 @@ export class InvoiceService {
     const data: Prisma.InvoiceUpdateInput = {
       issueDate,
       dueDate,
+      ...(input.billType !== undefined && { billType: input.billType }),
       ...('poNumber' in input && { poNumber: input.poNumber ?? null }),
+      ...('orderDate' in input && { orderDate: input.orderDate ? startOfDay(input.orderDate) : null }),
+      ...('challanNo' in input && { challanNo: input.challanNo ?? null }),
+      ...('challanDate' in input && { challanDate: input.challanDate ? startOfDay(input.challanDate) : null }),
       ...('reference' in input && { reference: input.reference ?? null }),
+      ...('modeOfDispatch' in input && { modeOfDispatch: input.modeOfDispatch ?? null }),
+      ...('lhNo' in input && { lhNo: input.lhNo ?? null }),
+      ...('lhDate' in input && { lhDate: input.lhDate ? startOfDay(input.lhDate) : null }),
+      ...('dcNo' in input && { dcNo: input.dcNo ?? null }),
+      ...('dcDate' in input && { dcDate: input.dcDate ? startOfDay(input.dcDate) : null }),
+      ...('paymentTerms' in input && { paymentTerms: input.paymentTerms ?? null }),
       ...('notes' in input && { notes: input.notes ?? null }),
       ...('terms' in input && { terms: input.terms ?? null }),
       ...('internalNotes' in input && { internalNotes: input.internalNotes ?? null }),
@@ -930,21 +1097,21 @@ export class InvoiceService {
       }
     }
 
-    await prisma.$transaction(async (tx) => {
-      await tx.invoice.update({ where: { id }, data });
+    await prisma.$transaction(
+      async (tx) => {
+        await tx.invoice.update({ where: { id }, data });
+      },
+      { maxWait: 10000, timeout: 30000 }
+    );
 
-      await ActivityService.log(
-        {
-          companyId,
-          invoiceId: id,
-          userId: context.userId,
-          action: ActivityType.UPDATED,
-          description: `Invoice ${existing.invoiceNumber} updated`,
-          metadata: { mode, fields: Object.keys(input) },
-          ipAddress: context.ipAddress
-        },
-        tx
-      );
+    await ActivityService.log({
+      companyId,
+      invoiceId: id,
+      userId: context.userId,
+      action: ActivityType.UPDATED,
+      description: `Invoice ${existing.invoiceNumber} updated`,
+      metadata: { mode, fields: Object.keys(input) },
+      ipAddress: context.ipAddress
     });
 
     // Totals may have moved; let the shared rules settle status and balance.
@@ -1053,27 +1220,27 @@ export class InvoiceService {
       throw AppError.badRequest('An invoice with recorded payments cannot be moved back to draft');
     }
 
-    await prisma.$transaction(async (tx) => {
-      await tx.invoice.update({
-        where: { id },
-        data: {
-          status,
-          sentAt: status === InvoiceStatus.SENT ? invoice.sentAt ?? new Date() : null
-        }
-      });
+    await prisma.$transaction(
+      async (tx) => {
+        await tx.invoice.update({
+          where: { id },
+          data: {
+            status,
+            sentAt: status === InvoiceStatus.SENT ? invoice.sentAt ?? new Date() : null
+          }
+        });
+      },
+      { maxWait: 10000, timeout: 30000 }
+    );
 
-      await ActivityService.log(
-        {
-          companyId,
-          invoiceId: id,
-          userId: context.userId,
-          action: ActivityType.STATUS_CHANGED,
-          description: `Status changed from ${invoice.status} to ${status}`,
-          metadata: { from: invoice.status, to: status },
-          ipAddress: context.ipAddress
-        },
-        tx
-      );
+    await ActivityService.log({
+      companyId,
+      invoiceId: id,
+      userId: context.userId,
+      action: ActivityType.STATUS_CHANGED,
+      description: `Status changed from ${invoice.status} to ${status}`,
+      metadata: { from: invoice.status, to: status },
+      ipAddress: context.ipAddress
     });
 
     await this.syncState(id);
@@ -1109,38 +1276,38 @@ export class InvoiceService {
       );
     }
 
-    await prisma.$transaction(async (tx) => {
-      await tx.invoice.update({
-        where: { id },
-        data: {
-          status: InvoiceStatus.CANCELLED,
-          cancelledAt: new Date(),
-          cancelledReason: reason ?? null,
-          balanceDue: 0
-        }
-      });
+    await prisma.$transaction(
+      async (tx) => {
+        await tx.invoice.update({
+          where: { id },
+          data: {
+            status: InvoiceStatus.CANCELLED,
+            cancelledAt: new Date(),
+            cancelledReason: reason ?? null,
+            balanceDue: 0
+          }
+        });
 
-      // Pending reminders for a cancelled invoice would chase money that is no
-      // longer owed.
-      await tx.paymentReminder.updateMany({
-        where: { invoiceId: id, status: 'SCHEDULED' },
-        data: { status: 'CANCELLED' }
-      });
+        // Pending reminders for a cancelled invoice would chase money that is no
+        // longer owed.
+        await tx.paymentReminder.updateMany({
+          where: { invoiceId: id, status: 'SCHEDULED' },
+          data: { status: 'CANCELLED' }
+        });
+      },
+      { maxWait: 10000, timeout: 30000 }
+    );
 
-      await ActivityService.log(
-        {
-          companyId,
-          invoiceId: id,
-          userId: context.userId,
-          action: ActivityType.CANCELLED,
-          description: reason
-            ? `Invoice cancelled: ${reason}`
-            : `Invoice ${invoice.invoiceNumber} cancelled`,
-          metadata: { reason: reason ?? null, previousStatus: invoice.status },
-          ipAddress: context.ipAddress
-        },
-        tx
-      );
+    await ActivityService.log({
+      companyId,
+      invoiceId: id,
+      userId: context.userId,
+      action: ActivityType.CANCELLED,
+      description: reason
+        ? `Invoice cancelled: ${reason}`
+        : `Invoice ${invoice.invoiceNumber} cancelled`,
+      metadata: { reason: reason ?? null, previousStatus: invoice.status },
+      ipAddress: context.ipAddress
     });
 
     return this.getById(companyId, id);
@@ -1160,9 +1327,19 @@ export class InvoiceService {
       select: {
         customerId: true,
         invoiceNumber: true,
+        billType: true,
         currency: true,
         poNumber: true,
+        orderDate: true,
+        challanNo: true,
+        challanDate: true,
         reference: true,
+        modeOfDispatch: true,
+        lhNo: true,
+        lhDate: true,
+        dcNo: true,
+        dcDate: true,
+        paymentTerms: true,
         placeOfSupply: true,
         isReverseCharge: true,
         notes: true,
@@ -1203,10 +1380,20 @@ export class InvoiceService {
       companyId,
       {
         customerId: source.customerId,
+        billType: source.billType,
         issueDate,
         dueDate: addDays(issueDate, originalTermDays),
         poNumber: source.poNumber,
+        orderDate: source.orderDate,
+        challanNo: source.challanNo,
+        challanDate: source.challanDate,
         reference: source.reference,
+        modeOfDispatch: source.modeOfDispatch,
+        lhNo: source.lhNo,
+        lhDate: source.lhDate,
+        dcNo: source.dcNo,
+        dcDate: source.dcDate,
+        paymentTerms: source.paymentTerms,
         currency: source.currency,
         placeOfSupply: source.placeOfSupply,
         isReverseCharge: source.isReverseCharge,

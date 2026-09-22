@@ -64,6 +64,10 @@ const paymentSelect = {
   }
 } satisfies Prisma.PaymentSelect;
 
+export type PaymentRecord = Prisma.PaymentGetPayload<{
+  select: typeof paymentSelect;
+}>;
+
 /** Statuses that can receive money. A draft has not been issued yet. */
 const PAYABLE_STATUSES: InvoiceStatus[] = [
   InvoiceStatus.SENT,
@@ -188,42 +192,41 @@ export class PaymentService {
       throw AppError.badRequest('Payment date cannot be in the future');
     }
 
-    const payment = await prisma.$transaction(async (tx) => {
-      const created = await tx.payment.create({
-        data: {
-          companyId,
-          invoiceId,
-          amount,
-          paymentDate,
-          paymentMethod: input.paymentMethod ?? PaymentMethod.BANK_TRANSFER,
-          referenceNumber: input.referenceNumber ?? null,
-          notes: input.notes ?? null
-        },
-        select: paymentSelect
-      });
-
-      await InvoiceService.syncState(invoiceId, tx);
-
-      await ActivityService.log(
-        {
-          companyId,
-          invoiceId,
-          userId: context.userId,
-          action: ActivityType.PAYMENT_RECORDED,
-          description: `Payment of ${amount.toFixed(2)} recorded via ${
-            input.paymentMethod ?? PaymentMethod.BANK_TRANSFER
-          }`,
-          metadata: {
+    const payment = await prisma.$transaction(
+      async (tx) => {
+        const created = await tx.payment.create({
+          data: {
+            companyId,
+            invoiceId,
             amount,
+            paymentDate,
             paymentMethod: input.paymentMethod ?? PaymentMethod.BANK_TRANSFER,
-            referenceNumber: input.referenceNumber ?? null
+            referenceNumber: input.referenceNumber ?? null,
+            notes: input.notes ?? null
           },
-          ipAddress: context.ipAddress
-        },
-        tx
-      );
+          select: paymentSelect
+        });
 
-      return created;
+        await InvoiceService.syncState(invoiceId, tx);
+        return created;
+      },
+      { maxWait: 10000, timeout: 30000 }
+    );
+
+    await ActivityService.log({
+      companyId,
+      invoiceId,
+      userId: context.userId,
+      action: ActivityType.PAYMENT_RECORDED,
+      description: `Payment of ${amount.toFixed(2)} recorded via ${
+        input.paymentMethod ?? PaymentMethod.BANK_TRANSFER
+      }`,
+      metadata: {
+        amount,
+        paymentMethod: input.paymentMethod ?? PaymentMethod.BANK_TRANSFER,
+        referenceNumber: input.referenceNumber ?? null
+      },
+      ipAddress: context.ipAddress
     });
 
     // Settling the invoice makes any pending chase-ups pointless.
@@ -237,43 +240,43 @@ export class PaymentService {
     paymentId: string,
     input: UpdatePaymentInput,
     context: { userId?: string; ipAddress?: string | null } = {}
-  ) {
+  ): Promise<PaymentRecord> {
     const existing = await prisma.payment.findFirst({
       where: { id: paymentId, companyId },
-      select: { id: true, invoiceId: true, amount: true }
+      select: { id: true, invoiceId: true, amount: true, paymentDate: true }
     });
 
     if (!existing) throw AppError.notFound('Payment not found');
 
-    const invoice = await this.getInvoice(companyId, existing.invoiceId);
-
-    if (invoice.status === InvoiceStatus.CANCELLED) {
-      throw AppError.badRequest('Payments on a cancelled invoice cannot be edited');
-    }
-
     const data: Prisma.PaymentUpdateInput = {};
 
     if (input.amount !== undefined) {
-      const amount = round2(input.amount);
+      const amount = Number(input.amount);
+      if (!(amount > 0)) throw AppError.badRequest('Payment amount must be greater than zero');
 
-      if (amount <= 0) {
-        throw AppError.badRequest('Payment amount must be greater than zero');
-      }
+      const delta = amount - toNumber(existing.amount);
+      if (delta > 0) {
+        const invoice = await prisma.invoice.findUnique({
+          where: { id: existing.invoiceId },
+          select: { balanceDue: true }
+        });
 
-      // The balance already includes this payment, so the room available is the
-      // current balance plus whatever this row is currently contributing.
-      const available = round2(toNumber(invoice.balanceDue) + toNumber(existing.amount));
+        if (!invoice) throw AppError.notFound('Invoice not found');
 
-      if (amount > available) {
-        throw AppError.badRequest(
-          `Payment cannot exceed the outstanding balance of ${available.toFixed(2)}`
-        );
+        const currentBalance = toNumber(invoice.balanceDue);
+        if (delta > currentBalance) {
+          throw AppError.badRequest(
+            `Increasing this payment by ${delta.toFixed(
+              2
+            )} would exceed the outstanding balance of ${currentBalance.toFixed(2)}`
+          );
+        }
       }
 
       data.amount = amount;
     }
 
-    if (input.paymentDate !== undefined) {
+    if (input.paymentDate) {
       const paymentDate = startOfDay(input.paymentDate);
       if (paymentDate > today()) {
         throw AppError.badRequest('Payment date cannot be in the future');
@@ -285,31 +288,30 @@ export class PaymentService {
     if ('referenceNumber' in input) data.referenceNumber = input.referenceNumber ?? null;
     if ('notes' in input) data.notes = input.notes ?? null;
 
-    const updated = await prisma.$transaction(async (tx) => {
-      const row = await tx.payment.update({
-        where: { id: paymentId },
-        data,
-        select: paymentSelect
-      });
+    const updated = await prisma.$transaction(
+      async (tx) => {
+        const row = await tx.payment.update({
+          where: { id: paymentId },
+          data,
+          select: paymentSelect
+        });
 
-      await InvoiceService.syncState(existing.invoiceId, tx);
+        await InvoiceService.syncState(existing.invoiceId, tx);
+        return row;
+      },
+      { maxWait: 10000, timeout: 30000 }
+    );
 
-      await ActivityService.log(
-        {
-          companyId,
-          invoiceId: existing.invoiceId,
-          userId: context.userId,
-          action: ActivityType.PAYMENT_RECORDED,
-          description: `Payment updated from ${toNumber(existing.amount).toFixed(2)} to ${toNumber(
-            row.amount
-          ).toFixed(2)}`,
-          metadata: { paymentId, from: toNumber(existing.amount), to: toNumber(row.amount) },
-          ipAddress: context.ipAddress
-        },
-        tx
-      );
-
-      return row;
+    await ActivityService.log({
+      companyId,
+      invoiceId: existing.invoiceId,
+      userId: context.userId,
+      action: ActivityType.PAYMENT_RECORDED,
+      description: `Payment updated from ${toNumber(existing.amount).toFixed(2)} to ${toNumber(
+        updated.amount
+      ).toFixed(2)}`,
+      metadata: { paymentId, from: toNumber(existing.amount), to: toNumber(updated.amount) },
+      ipAddress: context.ipAddress
     });
 
     await this.cancelRemindersIfSettled(companyId, existing.invoiceId);
@@ -329,27 +331,27 @@ export class PaymentService {
 
     if (!existing) throw AppError.notFound('Payment not found');
 
-    await prisma.$transaction(async (tx) => {
-      await tx.payment.delete({ where: { id: paymentId } });
+    await prisma.$transaction(
+      async (tx) => {
+        await tx.payment.delete({ where: { id: paymentId } });
 
-      // Removing money may reopen the invoice, so the status has to be re-derived.
-      await InvoiceService.syncState(existing.invoiceId, tx);
+        // Removing money may reopen the invoice, so the status has to be re-derived.
+        await InvoiceService.syncState(existing.invoiceId, tx);
+      },
+      { maxWait: 10000, timeout: 30000 }
+    );
 
-      await ActivityService.log(
-        {
-          companyId,
-          invoiceId: existing.invoiceId,
-          userId: context.userId,
-          action: ActivityType.PAYMENT_DELETED,
-          description: `Payment of ${toNumber(existing.amount).toFixed(2)} deleted`,
-          metadata: {
-            amount: toNumber(existing.amount),
-            referenceNumber: existing.referenceNumber
-          },
-          ipAddress: context.ipAddress
-        },
-        tx
-      );
+    await ActivityService.log({
+      companyId,
+      invoiceId: existing.invoiceId,
+      userId: context.userId,
+      action: ActivityType.PAYMENT_DELETED,
+      description: `Payment of ${toNumber(existing.amount).toFixed(2)} deleted`,
+      metadata: {
+        amount: toNumber(existing.amount),
+        referenceNumber: existing.referenceNumber
+      },
+      ipAddress: context.ipAddress
     });
 
     return { id: paymentId };

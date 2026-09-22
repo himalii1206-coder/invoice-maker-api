@@ -167,39 +167,72 @@ export class PdfService {
     }
 
     // Title + meta block, right aligned against the header.
-    const boxWidth = 205;
+    const boxWidth = 220;
     const boxX = PAGE.width - MARGIN.right - boxWidth;
+
+    const documentTitle = (invoice.billType || 'TAX_INVOICE').replace(/_/g, ' ').toUpperCase();
 
     doc
       .font('Helvetica-Bold')
-      .fontSize(22)
+      .fontSize(18)
       .fillColor(INK.text)
-      .text('TAX INVOICE', boxX, top, { width: boxWidth, align: 'right' });
+      .text(documentTitle, boxX, top, { width: boxWidth, align: 'right' });
 
     const meta: Array<[string, string]> = [
-      ['Invoice No', invoice.invoiceNumber],
-      ['Invoice Date', formatDocumentDate(invoice.issueDate)],
+      ['Bill / Inv No', invoice.invoiceNumber],
+      ['Bill Date', formatDocumentDate(invoice.issueDate)],
       ['Due Date', formatDocumentDate(invoice.dueDate)]
     ];
 
-    if (invoice.poNumber) meta.push(['PO Number', invoice.poNumber]);
+    if (invoice.challanNo) {
+      meta.push([
+        'Challan No',
+        invoice.challanDate
+          ? `${invoice.challanNo} (${formatDocumentDate(invoice.challanDate)})`
+          : invoice.challanNo
+      ]);
+    } else if (invoice.challanDate) {
+      meta.push(['Challan Date', formatDocumentDate(invoice.challanDate)]);
+    }
+
+    if (invoice.poNumber) {
+      meta.push([
+        'Order No',
+        invoice.orderDate
+          ? `${invoice.poNumber} (${formatDocumentDate(invoice.orderDate)})`
+          : invoice.poNumber
+      ]);
+    } else if (invoice.orderDate) {
+      meta.push(['Order Date', formatDocumentDate(invoice.orderDate)]);
+    }
+
+    if (invoice.dcNo) {
+      meta.push([
+        'Your D.C. No',
+        invoice.dcDate
+          ? `${invoice.dcNo} (${formatDocumentDate(invoice.dcDate)})`
+          : invoice.dcNo
+      ]);
+    } else if (invoice.dcDate) {
+      meta.push(['Your D.C. Date', formatDocumentDate(invoice.dcDate)]);
+    }
+
     if (invoice.reference) meta.push(['Reference', invoice.reference]);
-    if (invoice.placeOfSupply) meta.push(['Place of Supply', invoice.placeOfSupply]);
     meta.push(['Status', this.statusLabel(invoice.status)]);
 
-    let metaY = top + 30;
+    let metaY = top + 26;
 
     for (const [label, value] of meta) {
-      doc.font('Helvetica').fontSize(8.5).fillColor(INK.subtle);
-      doc.text(`${label}`, boxX, metaY, { width: boxWidth * 0.45, align: 'left' });
+      doc.font('Helvetica').fontSize(8).fillColor(INK.subtle);
+      doc.text(`${label}`, boxX, metaY, { width: boxWidth * 0.42, align: 'left' });
 
-      doc.font('Helvetica-Bold').fontSize(8.5).fillColor(INK.text);
-      doc.text(value, boxX + boxWidth * 0.45, metaY, {
-        width: boxWidth * 0.55,
+      doc.font('Helvetica-Bold').fontSize(8).fillColor(INK.text);
+      doc.text(value, boxX + boxWidth * 0.42, metaY, {
+        width: boxWidth * 0.58,
         align: 'right'
       });
 
-      metaY += 13;
+      metaY += 12;
     }
 
     const dividerY = Math.max(y, metaY) + 10;
@@ -235,12 +268,24 @@ export class PdfService {
       invoice.billingGstin ? `GSTIN: ${invoice.billingGstin}` : null
     ].filter(Boolean) as string[];
 
+    const dispatchLines: string[] = [];
+    if (invoice.modeOfDispatch) dispatchLines.push(`Dispatch Mode: ${invoice.modeOfDispatch}`);
+    if (invoice.lhNo) {
+      dispatchLines.push(
+        invoice.lhDate
+          ? `LH No: ${invoice.lhNo} (Date: ${formatDocumentDate(invoice.lhDate)})`
+          : `LH No: ${invoice.lhNo}`
+      );
+    }
+    if (invoice.paymentTerms) dispatchLines.push(`Payment Terms: ${invoice.paymentTerms}`);
+
     const supplyDetails = [
       `Place of Supply: ${invoice.placeOfSupply ?? '-'}`,
       `Supply Type: ${invoice.isIgst ? 'Inter-State (IGST)' : 'Intra-State (CGST + SGST)'}`,
       company.state ? `Supplier State: ${company.state}` : null,
       invoice.isReverseCharge ? 'Reverse Charge: Applicable' : 'Reverse Charge: Not Applicable',
-      `Currency: ${invoice.currency}`
+      `Currency: ${invoice.currency}`,
+      ...dispatchLines
     ].filter(Boolean) as string[];
 
     const heightOf = (lines: string[]) => 30 + lines.length * 11;
@@ -272,7 +317,7 @@ export class PdfService {
     };
 
     drawBox(MARGIN.left, 'Bill To', invoice.billingName, billTo);
-    drawBox(MARGIN.left + colWidth + gap, 'Supply Details', null, supplyDetails);
+    drawBox(MARGIN.left + colWidth + gap, 'Dispatch & Supply Details', null, supplyDetails);
 
     doc.y = top + boxHeight + 14;
   }

@@ -312,78 +312,80 @@ export class CreditDebitNoteService {
 
     const status = input.status === NoteStatus.ISSUED ? NoteStatus.ISSUED : NoteStatus.DRAFT;
 
-    const created = await prisma.$transaction(async (tx) => {
-      const numbering = await NumberingService.allocate(
-        tx,
-        companyId,
-        documentTypeFor(input.noteType),
-        noteDate
-      );
-
-      const note = await tx.creditDebitNote.create({
-        data: {
+    const created = await prisma.$transaction(
+      async (tx) => {
+        const numbering = await NumberingService.allocate(
+          tx,
           companyId,
-          customerId: customer.id,
-          invoiceId: linkedInvoice?.id ?? null,
-          noteType: input.noteType,
-          noteNumber: numbering.number,
-          sequenceNo: numbering.sequenceNo,
-          financialYear: numbering.financialYear,
-          status,
-          noteDate,
-          reason: input.reason ?? null,
-
-          billingName: customer.name,
-          billingGstin: customer.gstin,
-          billingAddress: customer.address,
-          billingState: customer.state,
-          placeOfSupply: supply.placeOfSupply,
-          placeOfSupplyCode: supply.placeOfSupplyCode,
-          isIgst: supply.isIgst,
-
-          subtotal: computed.subtotal,
-          discountAmount: computed.discountAmount,
-          taxableAmount: computed.taxableAmount,
-          cgstAmount: computed.cgstAmount,
-          sgstAmount: computed.sgstAmount,
-          igstAmount: computed.igstAmount,
-          taxAmount: computed.taxAmount,
-          roundOff: computed.roundOff,
-          grandTotal: computed.grandTotal,
-
-          notes: input.notes ?? null,
-          issuedAt: status === NoteStatus.ISSUED ? new Date() : null,
-
-          items: { create: this.buildItemRows(computed.lines) }
-        },
-        select: { id: true, noteNumber: true }
-      });
-
-      // Only an issued note moves the invoice's balance.
-      if (linkedInvoice && status === NoteStatus.ISSUED) {
-        await InvoiceService.syncState(linkedInvoice.id, tx);
-
-        await ActivityService.log(
-          {
-            companyId,
-            invoiceId: linkedInvoice.id,
-            userId: context.userId,
-            action: ActivityType.NOTE_LINKED,
-            description: `${labelFor(input.noteType)} ${note.noteNumber} issued against this invoice`,
-            metadata: {
-              noteId: note.id,
-              noteNumber: note.noteNumber,
-              noteType: input.noteType,
-              amount: computed.grandTotal
-            },
-            ipAddress: context.ipAddress
-          },
-          tx
+          documentTypeFor(input.noteType),
+          noteDate
         );
-      }
 
-      return note;
-    });
+        const note = await tx.creditDebitNote.create({
+          data: {
+            companyId,
+            customerId: customer.id,
+            invoiceId: linkedInvoice?.id ?? null,
+            noteType: input.noteType,
+            noteNumber: numbering.number,
+            sequenceNo: numbering.sequenceNo,
+            financialYear: numbering.financialYear,
+            status,
+            noteDate,
+            reason: input.reason ?? null,
+
+            billingName: customer.name,
+            billingGstin: customer.gstin,
+            billingAddress: customer.address,
+            billingState: customer.state,
+            placeOfSupply: supply.placeOfSupply,
+            placeOfSupplyCode: supply.placeOfSupplyCode,
+            isIgst: supply.isIgst,
+
+            subtotal: computed.subtotal,
+            discountAmount: computed.discountAmount,
+            taxableAmount: computed.taxableAmount,
+            cgstAmount: computed.cgstAmount,
+            sgstAmount: computed.sgstAmount,
+            igstAmount: computed.igstAmount,
+            taxAmount: computed.taxAmount,
+            roundOff: computed.roundOff,
+            grandTotal: computed.grandTotal,
+
+            notes: input.notes ?? null,
+            issuedAt: status === NoteStatus.ISSUED ? new Date() : null,
+
+            items: { create: this.buildItemRows(computed.lines) }
+          },
+          select: { id: true, noteNumber: true }
+        });
+
+        // Only an issued note moves the invoice's balance.
+        if (linkedInvoice && status === NoteStatus.ISSUED) {
+          await InvoiceService.syncState(linkedInvoice.id, tx);
+        }
+
+        return note;
+      },
+      { maxWait: 10000, timeout: 30000 }
+    );
+
+    if (linkedInvoice && status === NoteStatus.ISSUED) {
+      await ActivityService.log({
+        companyId,
+        invoiceId: linkedInvoice.id,
+        userId: context.userId,
+        action: ActivityType.NOTE_LINKED,
+        description: `${labelFor(input.noteType)} ${created.noteNumber} issued against this invoice`,
+        metadata: {
+          noteId: created.id,
+          noteNumber: created.noteNumber,
+          noteType: input.noteType,
+          amount: computed.grandTotal
+        },
+        ipAddress: context.ipAddress
+      });
+    }
 
     return this.getById(companyId, created.id);
   }
@@ -537,34 +539,36 @@ export class CreditDebitNoteService {
       this.assertCreditFitsInvoice(invoice, toNumber(note.grandTotal), id);
     }
 
-    await prisma.$transaction(async (tx) => {
-      await tx.creditDebitNote.update({
-        where: { id },
-        data: { status: NoteStatus.ISSUED, issuedAt: new Date() }
+    await prisma.$transaction(
+      async (tx) => {
+        await tx.creditDebitNote.update({
+          where: { id },
+          data: { status: NoteStatus.ISSUED, issuedAt: new Date() }
+        });
+
+        if (note.invoiceId) {
+          await InvoiceService.syncState(note.invoiceId, tx);
+        }
+      },
+      { maxWait: 10000, timeout: 30000 }
+    );
+
+    if (note.invoiceId) {
+      await ActivityService.log({
+        companyId,
+        invoiceId: note.invoiceId,
+        userId: context.userId,
+        action: ActivityType.NOTE_LINKED,
+        description: `${labelFor(note.noteType)} ${note.noteNumber} issued against this invoice`,
+        metadata: {
+          noteId: id,
+          noteNumber: note.noteNumber,
+          noteType: note.noteType,
+          amount: toNumber(note.grandTotal)
+        },
+        ipAddress: context.ipAddress
       });
-
-      if (note.invoiceId) {
-        await InvoiceService.syncState(note.invoiceId, tx);
-
-        await ActivityService.log(
-          {
-            companyId,
-            invoiceId: note.invoiceId,
-            userId: context.userId,
-            action: ActivityType.NOTE_LINKED,
-            description: `${labelFor(note.noteType)} ${note.noteNumber} issued against this invoice`,
-            metadata: {
-              noteId: id,
-              noteNumber: note.noteNumber,
-              noteType: note.noteType,
-              amount: toNumber(note.grandTotal)
-            },
-            ipAddress: context.ipAddress
-          },
-          tx
-        );
-      }
-    });
+    }
 
     return this.getById(companyId, id);
   }
@@ -585,30 +589,32 @@ export class CreditDebitNoteService {
       throw AppError.badRequest('This note is already cancelled');
     }
 
-    await prisma.$transaction(async (tx) => {
-      await tx.creditDebitNote.update({
-        where: { id },
-        data: { status: NoteStatus.CANCELLED }
+    await prisma.$transaction(
+      async (tx) => {
+        await tx.creditDebitNote.update({
+          where: { id },
+          data: { status: NoteStatus.CANCELLED }
+        });
+
+        // Withdrawing the note gives the invoice its balance back.
+        if (note.invoiceId) {
+          await InvoiceService.syncState(note.invoiceId, tx);
+        }
+      },
+      { maxWait: 10000, timeout: 30000 }
+    );
+
+    if (note.invoiceId) {
+      await ActivityService.log({
+        companyId,
+        invoiceId: note.invoiceId,
+        userId: context.userId,
+        action: ActivityType.NOTE_LINKED,
+        description: `${labelFor(note.noteType)} ${note.noteNumber} cancelled`,
+        metadata: { noteId: id, noteNumber: note.noteNumber, cancelled: true },
+        ipAddress: context.ipAddress
       });
-
-      // Withdrawing the note gives the invoice its balance back.
-      if (note.invoiceId) {
-        await InvoiceService.syncState(note.invoiceId, tx);
-
-        await ActivityService.log(
-          {
-            companyId,
-            invoiceId: note.invoiceId,
-            userId: context.userId,
-            action: ActivityType.NOTE_LINKED,
-            description: `${labelFor(note.noteType)} ${note.noteNumber} cancelled`,
-            metadata: { noteId: id, noteNumber: note.noteNumber, cancelled: true },
-            ipAddress: context.ipAddress
-          },
-          tx
-        );
-      }
-    });
+    }
 
     return this.getById(companyId, id);
   }

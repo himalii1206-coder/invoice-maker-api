@@ -38,30 +38,33 @@ export class AuthService {
     const passwordHash = await hashPassword(input.password);
 
     // Create User & Company in a single atomic transaction
-    const result = await prisma.$transaction(async (tx) => {
-      const user = await tx.user.create({
-        data: {
-          email: input.email.toLowerCase(),
-          passwordHash,
-          firstName: input.firstName,
-          lastName: input.lastName,
-          role: 'OWNER'
-        }
-      });
+    const result = await prisma.$transaction(
+      async (tx) => {
+        const user = await tx.user.create({
+          data: {
+            email: input.email.toLowerCase(),
+            passwordHash,
+            firstName: input.firstName,
+            lastName: input.lastName,
+            role: 'OWNER'
+          }
+        });
 
-      const company = await tx.company.create({
-        data: {
-          userId: user.id,
-          name: input.businessName,
-          phone: input.phone || null,
-          gstin: input.gstin || null,
-          invoicePrefix: 'INV-',
-          nextInvoiceNumber: 1001
-        }
-      });
+        const company = await tx.company.create({
+          data: {
+            userId: user.id,
+            name: input.businessName,
+            phone: input.phone || null,
+            gstin: input.gstin || null,
+            invoicePrefix: 'INV-',
+            nextInvoiceNumber: 1001
+          }
+        });
 
-      return { user, company };
-    });
+        return { user, company };
+      },
+      { maxWait: 10000, timeout: 30000 }
+    );
 
     // Create auth session & tokens
     const tokens = await this.createSession(result.user.id, result.user.email, result.user.role, meta);

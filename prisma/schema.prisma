@@ -83,6 +83,9 @@ model Company {
   recurring         RecurringInvoice[]
   reminders         PaymentReminder[]
   activities        InvoiceActivity[]
+  vendors           Vendor[]
+  purchaseBills     PurchaseBill[]
+  purchasePayments  PurchasePayment[]
 
   @@map("companies")
 }
@@ -165,11 +168,23 @@ model Invoice {
   /// Indian financial year the invoice falls in, e.g. "2026-27".
   financialYear String        @default("")
   status        InvoiceStatus @default(DRAFT)
+  billType      String        @default("TAX_INVOICE")
   issueDate     DateTime      @default(now())
   dueDate       DateTime
   poNumber      String?
+  orderDate     DateTime?
   reference     String?
   currency      String        @default("INR")
+
+  /// Dispatch and Challan / Logistics details
+  challanNo      String?
+  challanDate    DateTime?
+  modeOfDispatch String?
+  lhNo           String?
+  lhDate         DateTime?
+  dcNo           String?
+  dcDate         DateTime?
+  paymentTerms   String?
 
   /// Snapshot of the buyer as it was when the invoice was issued. A later edit
   /// to the customer record must never silently rewrite an issued document.
@@ -228,6 +243,7 @@ model Invoice {
 
   @@unique([companyId, invoiceNumber])
   @@index([companyId])
+  @@index([companyId, billType])
   @@index([customerId])
   @@index([status])
   @@index([companyId, issueDate])
@@ -658,4 +674,207 @@ enum DocumentType {
   INVOICE
   CREDIT_NOTE
   DEBIT_NOTE
+  PURCHASE_BILL
 }
+
+enum PurchaseBillStatus {
+  DRAFT
+  RECEIVED
+  PARTIALLY_PAID
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+enum ItcEligibility {
+  INPUTS
+  CAPITAL_GOODS
+  INPUT_SERVICES
+  INELIGIBLE
+}
+
+enum ItemCategory {
+  GOODS
+  SERVICE
+  RAW_MATERIAL
+  CAPITAL_ASSET
+  EXPENSE
+}
+
+// ---------------------------------------------------------------------------
+// Purchases & Vendors
+// ---------------------------------------------------------------------------
+
+model Vendor {
+  id                 String             @id @default(uuid())
+  companyId          String
+  name               String
+  tradeName          String?
+  contactPerson      String?
+  email              String?
+  phone              String?
+  type               CustomerType       @default(BUSINESS)
+  gstin              String?
+  pan                String?
+  address            String?
+  city               String?
+  state              String?
+  country            String             @default("India")
+  postalCode         String?
+  bankName           String?
+  accountNumber      String?
+  ifscCode           String?
+  branch             String?
+  openingBalance     Decimal?           @default(0.00) @db.Decimal(14, 2)
+  openingBalanceDate DateTime?
+  balanceType        String?            @default("CR")
+  paymentTerms       String?
+  partyCategory      String?
+  narration          String?
+  isActive           Boolean            @default(true)
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  company            Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  purchaseBills      PurchaseBill[]
+  payments           PurchasePayment[]
+
+  @@index([companyId])
+  @@map("vendors")
+}
+
+model PurchaseBill {
+  id                  String             @id @default(uuid())
+  companyId           String
+  vendorId            String?
+  billNumber          String
+  vendorInvoiceNumber String?
+  sequenceNo          Int                @default(0)
+  financialYear       String             @default("")
+  status              PurchaseBillStatus @default(RECEIVED)
+  billDate            DateTime           @default(now())
+  dueDate             DateTime?
+  paymentTerms        String?
+  currency            String             @default("INR")
+
+  /// Logistics & Inward references
+  poNumber        String?
+  poDate          DateTime?
+  grnNumber       String?
+  grnDate         DateTime?
+  transporterName String?
+  vehicleNumber   String?
+  lrNumber        String?
+  lrDate          DateTime?
+
+  /// Vendor Snapshot at time of bill
+  vendorName       String  @default("")
+  vendorGstin      String?
+  vendorPhone      String?
+  vendorEmail      String?
+  vendorAddress    String?
+  vendorCity       String?
+  vendorState      String?
+  vendorCountry    String  @default("India")
+  vendorPostalCode String?
+
+  /// GST & Tax compliance
+  placeOfSupply     String?
+  placeOfSupplyCode String?
+  isIgst            Boolean        @default(false)
+  isReverseCharge   Boolean        @default(false)
+  itcEligibility    ItcEligibility @default(INPUTS)
+
+  /// Financials
+  subtotal       Decimal @db.Decimal(14, 2)
+  discountAmount Decimal @default(0.00) @db.Decimal(14, 2)
+  taxableAmount  Decimal @default(0.00) @db.Decimal(14, 2)
+  cgstAmount     Decimal @default(0.00) @db.Decimal(14, 2)
+  sgstAmount     Decimal @default(0.00) @db.Decimal(14, 2)
+  igstAmount     Decimal @default(0.00) @db.Decimal(14, 2)
+  taxAmount      Decimal @db.Decimal(14, 2)
+  otherCharges   Decimal @default(0.00) @db.Decimal(14, 2)
+  roundOff       Decimal @default(0.00) @db.Decimal(8, 2)
+  grandTotal     Decimal @db.Decimal(14, 2)
+  amountPaid     Decimal @default(0.00) @db.Decimal(14, 2)
+  balanceDue     Decimal @db.Decimal(14, 2)
+
+  notes         String?
+  terms         String?
+  internalNotes String?
+  attachmentUrl String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company  Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  vendor   Vendor?            @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  items    PurchaseBillItem[]
+  payments PurchasePayment[]
+
+  @@unique([companyId, billNumber])
+  @@index([companyId])
+  @@index([vendorId])
+  @@index([status])
+  @@index([companyId, billDate])
+  @@index([companyId, financialYear])
+  @@map("purchase_bills")
+}
+
+model PurchaseBillItem {
+  id             String       @id @default(uuid())
+  purchaseBillId String
+  productId      String?
+  name           String
+  description    String?
+  hsnSacCode     String?
+  category       ItemCategory @default(GOODS)
+  unit           String       @default("PCS")
+  sortOrder      Int          @default(0)
+
+  quantity        Decimal @db.Decimal(12, 3)
+  unitPrice       Decimal @db.Decimal(14, 2)
+  discountPercent Decimal @default(0.00) @db.Decimal(5, 2)
+  discountAmount  Decimal @default(0.00) @db.Decimal(14, 2)
+  taxRate         Decimal @default(0.00) @db.Decimal(5, 2)
+
+  subtotal      Decimal @db.Decimal(14, 2)
+  taxableAmount Decimal @default(0.00) @db.Decimal(14, 2)
+  cgstRate      Decimal @default(0.00) @db.Decimal(5, 2)
+  cgstAmount    Decimal @default(0.00) @db.Decimal(14, 2)
+  sgstRate      Decimal @default(0.00) @db.Decimal(5, 2)
+  sgstAmount    Decimal @default(0.00) @db.Decimal(14, 2)
+  igstRate      Decimal @default(0.00) @db.Decimal(5, 2)
+  igstAmount    Decimal @default(0.00) @db.Decimal(14, 2)
+  taxAmount     Decimal @db.Decimal(14, 2)
+  total         Decimal @db.Decimal(14, 2)
+
+  purchaseBill PurchaseBill @relation(fields: [purchaseBillId], references: [id], onDelete: Cascade)
+
+  @@index([purchaseBillId])
+  @@map("purchase_bill_items")
+}
+
+model PurchasePayment {
+  id              String        @id @default(uuid())
+  purchaseBillId  String
+  companyId       String
+  vendorId        String?
+  amount          Decimal       @db.Decimal(14, 2)
+  paymentDate     DateTime      @default(now())
+  paymentMethod   PaymentMethod @default(BANK_TRANSFER)
+  referenceNumber String?
+  notes           String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  company      Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  purchaseBill PurchaseBill @relation(fields: [purchaseBillId], references: [id], onDelete: Cascade)
+  vendor       Vendor?      @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+
+  @@index([purchaseBillId])
+  @@index([companyId])
+  @@index([vendorId])
+  @@index([companyId, paymentDate])
+  @@map("purchase_payments")
+}
+
