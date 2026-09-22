@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { PaymentMethod } from '@prisma/client';
 
 const optionalText = (max: number) =>
   z
@@ -13,10 +14,11 @@ const optionalText = (max: number) =>
 export const updateCompanySchema = z.object({
   body: z.object({
     name: z
-      .string({ required_error: 'Business name is required' })
+      .string()
       .trim()
-      .min(1, 'Business name is required')
-      .max(150, 'Business name must be at most 150 characters'),
+      .min(1, 'Business name cannot be empty')
+      .max(150, 'Business name must be at most 150 characters')
+      .optional(),
     email: z
       .string()
       .trim()
@@ -37,7 +39,23 @@ export const updateCompanySchema = z.object({
     bankName: optionalText(150),
     accountNumber: optionalText(50),
     ifscCode: optionalText(30),
-    branch: optionalText(100)
+    branch: optionalText(100),
+    accountHolder: optionalText(150),
+    upiId: z
+      .string()
+      .trim()
+      .max(100, 'UPI ID must be at most 100 characters')
+      .regex(/^[\w.\-]{2,}@[A-Za-z]{2,}$/, 'Enter a valid UPI ID, for example business@okhdfcbank')
+      .optional()
+      .nullable()
+      .or(z.literal(''))
+      .transform((v) => (v === '' || v === null || v === undefined ? null : v)),
+    paymentInstructions: optionalText(500),
+    acceptedPaymentMethods: z
+      .array(z.nativeEnum(PaymentMethod))
+      .max(6, 'Too many payment methods')
+      .transform((values) => Array.from(new Set(values)))
+      .optional()
   })
 });
 

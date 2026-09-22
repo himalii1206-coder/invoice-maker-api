@@ -1,7 +1,10 @@
-import { Prisma, CustomerType } from '@prisma/client';
+import { Prisma, CustomerType, DocumentType, NotificationEvent } from '@prisma/client';
 import { prisma } from '../config/database.js';
 import { AppError } from '../utils/error.js';
 import { PaginationMeta } from '../types/index.js';
+import { InvoiceSettingsService } from './invoiceSettings.js';
+import { NumberingService } from './numbering.js';
+import { NotificationService } from './notification.js';
 
 export interface CreateCustomerInput {
   name: string;
@@ -49,6 +52,7 @@ export interface ListCustomersQuery {
 /** Shape returned to clients - keeps responses consistent across endpoints. */
 const customerSelect = {
   id: true,
+  customerCode: true,
   name: true,
   email: true,
   phone: true,
@@ -155,12 +159,62 @@ export class CustomerService {
     return { ...rest, invoiceCount: _count.invoices };
   }
 
+  /**
+   * Enforces the mandatory fields configured in Settings.
+   *
+   * These are business policy rather than data integrity, so they are checked
+   * here rather than in the zod schema: a business that later turns "GSTIN
+   * required" on must not have its existing customers become invalid, only new
+   * and edited ones.
+   */
+  private static assertRequiredFields(
+    settings: {
+      customerRequirePhone: boolean;
+      customerRequireState: boolean;
+      customerRequireGstin: boolean;
+    },
+    input: Partial<CreateCustomerInput>,
+    existing?: { phone: string | null; state: string | null; gstin: string | null; type: CustomerType }
+  ): void {
+    const value = <K extends 'phone' | 'state' | 'gstin'>(key: K): string | null =>
+      (key in input ? input[key] ?? null : existing?.[key] ?? null);
+
+    if (settings.customerRequirePhone && !value('phone')) {
+      throw AppError.badRequest('A phone number is required. You can change this in Settings.');
+    }
+
+    if (settings.customerRequireState && !value('state')) {
+      throw AppError.badRequest('A state is required. You can change this in Settings.');
+    }
+
+    // GSTIN is only meaningful for businesses, so an individual is exempt even
+    // when the rule is on.
+    const type = input.type ?? existing?.type ?? CustomerType.BUSINESS;
+    if (settings.customerRequireGstin && type === CustomerType.BUSINESS && !value('gstin')) {
+      throw AppError.badRequest('A GSTIN is required for business customers. You can change this in Settings.');
+    }
+  }
+
   static async create(companyId: string, input: CreateCustomerInput) {
     await this.assertEmailIsFree(companyId, input.email);
 
-    return prisma.customer.create({
+    const settings = await InvoiceSettingsService.getOrCreate(companyId);
+    this.assertRequiredFields(settings, input);
+
+    // The code and the row are written together so a failed insert does not
+    // burn a code.
+    const customer = await prisma.$transaction(async (tx) => {
+      const customerCode = await NumberingService.allocateEntityCode(
+        tx,
+        companyId,
+        DocumentType.CUSTOMER,
+        settings.customerCodePrefix
+      );
+
+      return tx.customer.create({
       data: {
         companyId,
+        customerCode,
         name: input.name,
         email: input.email ?? null,
         phone: input.phone ?? null,
@@ -186,13 +240,34 @@ export class CustomerService {
         ifscCode: input.ifscCode ?? null,
         isActive: input.isActive ?? true
       },
-      select: customerSelect
+        select: customerSelect
+      });
     });
+
+    await NotificationService.notify({
+      companyId,
+      event: NotificationEvent.CUSTOMER_ADDED,
+      title: `New customer: ${customer.name}`,
+      body: customer.customerCode ? `Account code ${customer.customerCode}` : undefined,
+      link: `/customers/${customer.id}`
+    });
+
+    return customer;
   }
 
   static async update(companyId: string, id: string, input: UpdateCustomerInput) {
     await this.assertExists(companyId, id);
     await this.assertEmailIsFree(companyId, input.email, id);
+
+    const [settings, existing] = await Promise.all([
+      InvoiceSettingsService.getOrCreate(companyId),
+      prisma.customer.findFirst({
+        where: { id, companyId },
+        select: { phone: true, state: true, gstin: true, type: true }
+      })
+    ]);
+
+    this.assertRequiredFields(settings, input, existing ?? undefined);
 
     // Only touch keys the caller actually sent, so a partial update never wipes
     // fields it did not mention.

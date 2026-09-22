@@ -18,6 +18,12 @@ export interface AuthRequest extends Request {
   token?: string;
   companyId?: string;
   /**
+   * The caller's role *within the resolved business*. An owner carries their
+   * user role; an invited collaborator carries the role on their membership,
+   * which may differ from `user.role`.
+   */
+  companyRole?: string;
+  /**
    * Output of the `validate` middleware. Zod coercion and defaults (e.g. the
    * numeric `page`/`limit`) only exist here - `req.query` keeps the raw strings.
    */

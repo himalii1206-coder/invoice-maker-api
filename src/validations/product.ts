@@ -2,15 +2,16 @@ import { z } from 'zod';
 
 const HSN_REGEX = /^[0-9]{4,8}$/;
 
-/** Turns "" into undefined so optional text fields can be cleared from a form. */
+/** Turns "" or null into undefined so optional text fields can be cleared from a form. */
 const optionalText = (max: number, label: string) =>
   z
     .string()
     .trim()
     .max(max, `${label} must be at most ${max} characters`)
     .optional()
+    .nullable()
     .or(z.literal(''))
-    .transform((v) => (v === '' ? undefined : v));
+    .transform((v) => (v === '' || v === null || v === undefined ? undefined : v));
 
 const productFields = {
   category: optionalText(100, 'Category'),

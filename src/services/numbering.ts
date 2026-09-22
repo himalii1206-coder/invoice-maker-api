@@ -245,6 +245,29 @@ export class NumberingService {
     }
   }
 
+  /**
+   * Allocates a directory code such as `CUST-0001` or `PRD-0042`.
+   *
+   * Customers and products are not legal documents, so these codes need to be
+   * unique and readable rather than gapless. They share the sequence table -
+   * with a single `ALL` bucket, since a customer code must never restart with
+   * the financial year - so the same atomic increment keeps two simultaneous
+   * creates from colliding.
+   */
+  static async allocateEntityCode(
+    tx: Prisma.TransactionClient,
+    companyId: string,
+    documentType: Extract<DocumentType, 'CUSTOMER' | 'PRODUCT'>,
+    prefix: string,
+    padding = 4
+  ): Promise<string> {
+    const cleanPrefix = (prefix || '').trim().toUpperCase();
+    const sequenceNo = await this.claimNext(tx, companyId, documentType, 'ALL', 1);
+    const padded = String(sequenceNo).padStart(Math.min(Math.max(padding, 1), 10), '0');
+
+    return cleanPrefix ? `${cleanPrefix}-${padded}` : padded;
+  }
+
   /** Digits at the tail of a manual number, used to keep the counter aligned. */
   static extractSequenceNo = (number: string): number => {
     const match = number.match(/(\d+)\s*$/);

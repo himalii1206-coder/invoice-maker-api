@@ -22,15 +22,18 @@ app.use(
   })
 );
 
-// Rate limiting for auth endpoints
+// Rate limiting. Configurable so an automated test run or a busy office behind
+// one NAT address is not mistaken for abuse; the defaults are unchanged.
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per windowMs
+  windowMs: config.rateLimit.windowMs,
+  max: config.rateLimit.max,
   standardHeaders: true,
   legacyHeaders: false,
   message: {
     success: false,
-    message: 'Too many requests from this IP, please try again after 15 minutes'
+    message: `Too many requests from this IP, please try again after ${Math.round(
+      config.rateLimit.windowMs / 60000
+    )} minutes`
   }
 });
 

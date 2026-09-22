@@ -1,7 +1,9 @@
-import { Prisma } from '@prisma/client';
+import { Prisma, DocumentType } from '@prisma/client';
 import { prisma } from '../config/database.js';
 import { AppError } from '../utils/error.js';
 import { PaginationMeta } from '../types/index.js';
+import { InvoiceSettingsService } from './invoiceSettings.js';
+import { NumberingService } from './numbering.js';
 
 export interface CreateProductInput {
   customerId?: string;
@@ -136,6 +138,21 @@ export class ProductService {
     return product;
   }
 
+  /**
+   * HSN/SAC is what determines the GST rate on a line, so a business filing
+   * returns usually wants it compulsory. Whether it is comes from settings.
+   */
+  private static assertHsnPresent(
+    settings: { gstEnabled: boolean; hsnRequiredOnProduct: boolean },
+    hsnSacCode: string | null | undefined
+  ): void {
+    if (settings.gstEnabled && settings.hsnRequiredOnProduct && !hsnSacCode) {
+      throw AppError.badRequest(
+        'An HSN / SAC code is required for catalogue items. You can change this in Settings.'
+      );
+    }
+  }
+
   static async create(companyId: string, input: CreateProductInput) {
     if (input.customerId) {
       await this.assertCustomerBelongsToCompany(companyId, input.customerId);
@@ -143,22 +160,39 @@ export class ProductService {
     const code = input.productCode || input.sku;
     await this.assertCodeIsFree(companyId, code);
 
-    return prisma.product.create({
-      data: {
-        companyId,
-        customerId: input.customerId ?? null,
-        category: input.category || 'General',
-        productCode: input.productCode ?? input.sku ?? null,
-        name: input.name,
-        description: input.description ?? null,
-        sku: input.sku ?? input.productCode ?? null,
-        price: input.price,
-        unit: input.unit ?? 'PCS',
-        taxRate: input.taxRate ?? 18,
-        hsnSacCode: input.hsnSacCode ?? null,
-        isActive: input.isActive ?? true
-      },
-      select: productSelect
+    const settings = await InvoiceSettingsService.getOrCreate(companyId);
+    this.assertHsnPresent(settings, input.hsnSacCode);
+
+    return prisma.$transaction(async (tx) => {
+      // A hand-entered code wins; otherwise one is generated from the prefix
+      // configured in settings.
+      const productCode =
+        input.productCode ??
+        input.sku ??
+        (await NumberingService.allocateEntityCode(
+          tx,
+          companyId,
+          DocumentType.PRODUCT,
+          settings.productCodePrefix
+        ));
+
+      return tx.product.create({
+        data: {
+          companyId,
+          customerId: input.customerId ?? null,
+          category: input.category || 'General',
+          productCode,
+          name: input.name,
+          description: input.description ?? null,
+          sku: input.sku ?? productCode,
+          price: input.price,
+          unit: input.unit ?? settings.defaultUnit,
+          taxRate: input.taxRate ?? Number(settings.defaultTaxRate),
+          hsnSacCode: input.hsnSacCode ?? null,
+          isActive: input.isActive ?? true
+        },
+        select: productSelect
+      });
     });
   }
 
@@ -171,6 +205,11 @@ export class ProductService {
     const code = input.productCode || input.sku;
     if (code) {
       await this.assertCodeIsFree(companyId, code, id);
+    }
+
+    if ('hsnSacCode' in input) {
+      const settings = await InvoiceSettingsService.getOrCreate(companyId);
+      this.assertHsnPresent(settings, input.hsnSacCode);
     }
 
     // Only touch keys the caller actually sent, so a partial update never wipes

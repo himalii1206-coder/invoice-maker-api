@@ -1,12 +1,13 @@
-import { Prisma, InvoiceStatus, DocumentType, ActivityType } from '@prisma/client';
+import { Prisma, InvoiceStatus, DocumentType, ActivityType, NotificationEvent } from '@prisma/client';
 import { prisma } from '../config/database.js';
 import { AppError } from '../utils/error.js';
 import { PaginationMeta } from '../types/index.js';
-import { Decimalish, round2, toNumber, toPaise, fromPaise } from '../utils/money.js';
+import { Decimalish, round2, toNumber, toPaise, fromPaise, formatMoney } from '../utils/money.js';
 import { addDays, financialYearOf, startOfDay, endOfDay, today } from '../utils/date.js';
 import { computeDocument, resolveSupply, TaxLineInput } from './tax.js';
 import { NumberingService } from './numbering.js';
 import { InvoiceSettingsService } from './invoiceSettings.js';
+import { NotificationService } from './notification.js';
 import { ActivityService } from './activity.js';
 
 /**
@@ -341,6 +342,8 @@ export class InvoiceService {
       where: { id: invoiceId },
       select: {
         id: true,
+        companyId: true,
+        invoiceNumber: true,
         status: true,
         dueDate: true,
         grandTotal: true,
@@ -395,6 +398,17 @@ export class InvoiceService {
           status === InvoiceStatus.PAID ? invoice.paidAt ?? new Date() : null
       }
     });
+
+    // Only on the transition, so re-syncing a settled invoice stays silent.
+    if (status === InvoiceStatus.PAID && invoice.status !== InvoiceStatus.PAID) {
+      await NotificationService.notify({
+        companyId: invoice.companyId,
+        event: NotificationEvent.INVOICE_PAID,
+        title: `Invoice ${invoice.invoiceNumber} fully settled`,
+        body: `${formatMoney(invoice.grandTotal)} received in full`,
+        link: `/invoices/${invoice.id}`
+      });
+    }
   }
 
   /**
@@ -410,15 +424,41 @@ export class InvoiceService {
 
     const now = today();
 
+    const where: Prisma.InvoiceWhereInput = {
+      companyId,
+      status: { in: [InvoiceStatus.SENT, InvoiceStatus.PARTIALLY_PAID] },
+      dueDate: { lt: now },
+      balanceDue: { gt: 0 }
+    };
+
+    // Read the invoices about to flip *before* the update, so the alert names
+    // them. Skipped entirely when nobody is subscribed to the event.
+    const settingsWantOverdueAlerts = settings.notifyEvents.includes(
+      NotificationEvent.INVOICE_OVERDUE
+    );
+
+    const becomingOverdue = settingsWantOverdueAlerts
+      ? await prisma.invoice.findMany({
+          where,
+          select: { id: true, invoiceNumber: true, balanceDue: true },
+          take: 25
+        })
+      : [];
+
     await prisma.invoice.updateMany({
-      where: {
-        companyId,
-        status: { in: [InvoiceStatus.SENT, InvoiceStatus.PARTIALLY_PAID] },
-        dueDate: { lt: now },
-        balanceDue: { gt: 0 }
-      },
+      where,
       data: { status: InvoiceStatus.OVERDUE }
     });
+
+    for (const invoice of becomingOverdue) {
+      await NotificationService.notify({
+        companyId,
+        event: NotificationEvent.INVOICE_OVERDUE,
+        title: `Invoice ${invoice.invoiceNumber} is overdue`,
+        body: `${formatMoney(invoice.balanceDue)} is still outstanding`,
+        link: `/invoices/${invoice.id}`
+      });
+    }
   }
 
   /** How much of the invoice a user may still change. */
@@ -819,7 +859,9 @@ export class InvoiceService {
     const supply = resolveSupply(company.state, customer.state, input.placeOfSupply);
     const computed = computeDocument(this.normaliseItems(input.items), {
       isIgst: supply.isIgst,
-      enableRoundOff: settings.enableRoundOff
+      enableRoundOff: settings.enableRoundOff,
+      gstEnabled: settings.gstEnabled,
+      pricesIncludeTax: settings.pricesIncludeTax
     });
 
     const status = input.status === InvoiceStatus.SENT ? InvoiceStatus.SENT : InvoiceStatus.DRAFT;
@@ -932,6 +974,15 @@ export class InvoiceService {
       ipAddress: context.ipAddress
     });
 
+    await NotificationService.notify({
+      companyId,
+      event: NotificationEvent.INVOICE_CREATED,
+      title: `Invoice ${created.invoiceNumber} created`,
+      body: `${customer.name} - ${formatMoney(computed.grandTotal)}`,
+      link: `/invoices/${created.id}`,
+      actorUserId: context.userId
+    });
+
     return this.getById(companyId, created.id);
   }
 
@@ -1041,7 +1092,9 @@ export class InvoiceService {
 
         const computed = computeDocument(this.normaliseItems(input.items), {
           isIgst: supply.isIgst,
-          enableRoundOff: settings.enableRoundOff
+          enableRoundOff: settings.enableRoundOff,
+          gstEnabled: settings.gstEnabled,
+          pricesIncludeTax: settings.pricesIncludeTax
         });
 
         Object.assign(data, {
@@ -1093,7 +1146,16 @@ export class InvoiceService {
       } else if (data.isIgst !== undefined) {
         // The CGST/SGST vs IGST split changed without the lines changing, so
         // the existing lines have to be re-split at the same rates.
-        await this.resplitExistingItems(id, supply.isIgst, settings.enableRoundOff, data);
+        await this.resplitExistingItems(
+          id,
+          supply.isIgst,
+          {
+            enableRoundOff: settings.enableRoundOff,
+            gstEnabled: settings.gstEnabled,
+            pricesIncludeTax: settings.pricesIncludeTax
+          },
+          data
+        );
       }
     }
 
@@ -1127,7 +1189,7 @@ export class InvoiceService {
   private static async resplitExistingItems(
     invoiceId: string,
     isIgst: boolean,
-    enableRoundOff: boolean,
+    taxOptions: { enableRoundOff: boolean; gstEnabled: boolean; pricesIncludeTax: boolean },
     data: Prisma.InvoiceUpdateInput
   ): Promise<void> {
     const items = await prisma.invoiceItem.findMany({
@@ -1150,7 +1212,7 @@ export class InvoiceService {
 
     const computed = computeDocument(this.normaliseItems(items), {
       isIgst,
-      enableRoundOff
+      ...taxOptions
     });
 
     Object.assign(data, {
@@ -1479,6 +1541,13 @@ export class InvoiceService {
       enableRoundOff: settings.enableRoundOff,
       showHsnColumn: settings.showHsnColumn,
       showDiscount: settings.showDiscount,
+      // The form mirrors these so its live preview matches what the server will
+      // compute when the invoice is saved.
+      gstEnabled: settings.gstEnabled,
+      pricesIncludeTax: settings.pricesIncludeTax,
+      enableReverseCharge: settings.enableReverseCharge,
+      defaultUnit: settings.defaultUnit,
+      defaultDiscountMode: settings.defaultDiscountMode,
       sellerState: company.state,
       sellerGstin: company.gstin
     };
@@ -1503,7 +1572,11 @@ export class InvoiceService {
         bankName: true,
         accountNumber: true,
         ifscCode: true,
-        branch: true
+        branch: true,
+        accountHolder: true,
+        upiId: true,
+        paymentInstructions: true,
+        acceptedPaymentMethods: true
       }
     });
 

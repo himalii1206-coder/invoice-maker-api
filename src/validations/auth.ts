@@ -46,3 +46,50 @@ export const forgotPasswordSchema = z.object({
     email: z.string().email('Invalid email address')
   })
 });
+
+/**
+ * Codes are either a 6-digit TOTP or a recovery code, which is hex in
+ * `XXXXX-XXXXX` form. One field accepts both so the user does not have to tell
+ * the form which kind they are pasting.
+ */
+const twoFactorCode = z
+  .string()
+  .trim()
+  .min(6, 'Enter the 6-digit code from your authenticator app')
+  .max(24, 'That code is too long');
+
+export const verifyTwoFactorSchema = z.object({
+  body: z.object({
+    challengeToken: z.string().min(1, 'Sign in again to get a new code prompt'),
+    code: twoFactorCode
+  })
+});
+
+export const changePasswordSchema = z.object({
+  body: z
+    .object({
+      currentPassword: z.string().min(1, 'Your current password is required'),
+      newPassword: z
+        .string()
+        .min(8, 'New password must be at least 8 characters long')
+        .max(100, 'New password is too long')
+    })
+    .refine((data) => data.currentPassword !== data.newPassword, {
+      message: 'The new password must be different from the current one',
+      path: ['newPassword']
+    })
+});
+
+export const enableTwoFactorSchema = z.object({
+  body: z.object({ code: twoFactorCode })
+});
+
+export const passwordConfirmationSchema = z.object({
+  body: z.object({
+    password: z.string().min(1, 'Your password is required to confirm this change')
+  })
+});
+
+export const sessionIdSchema = z.object({
+  params: z.object({ id: z.string().uuid('Invalid session id') })
+});

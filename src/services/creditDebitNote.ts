@@ -1,14 +1,15 @@
-import { Prisma, NoteType, NoteStatus, DocumentType, ActivityType } from '@prisma/client';
+import { Prisma, NoteType, NoteStatus, DocumentType, ActivityType, NotificationEvent } from '@prisma/client';
 import { prisma } from '../config/database.js';
 import { AppError } from '../utils/error.js';
 import { PaginationMeta } from '../types/index.js';
-import { Decimalish, round2, toNumber } from '../utils/money.js';
+import { Decimalish, round2, toNumber, formatMoney } from '../utils/money.js';
 import { startOfDay, endOfDay, financialYearOf, today } from '../utils/date.js';
 import { computeDocument, resolveSupply, TaxLineInput, ComputedTaxLine } from './tax.js';
 import { NumberingService } from './numbering.js';
 import { InvoiceSettingsService } from './invoiceSettings.js';
 import { InvoiceService } from './invoice.js';
 import { ActivityService } from './activity.js';
+import { NotificationService } from './notification.js';
 
 /**
  * Credit and debit notes.
@@ -303,7 +304,9 @@ export class CreditDebitNoteService {
 
     const computed = computeDocument(this.normaliseItems(input.items), {
       isIgst: supply.isIgst,
-      enableRoundOff: settings.enableRoundOff
+      enableRoundOff: settings.enableRoundOff,
+      gstEnabled: settings.gstEnabled,
+      pricesIncludeTax: settings.pricesIncludeTax
     });
 
     if (linkedInvoice && input.noteType === NoteType.CREDIT) {
@@ -384,6 +387,17 @@ export class CreditDebitNoteService {
           amount: computed.grandTotal
         },
         ipAddress: context.ipAddress
+      });
+    }
+
+    if (status === NoteStatus.ISSUED) {
+      await NotificationService.notify({
+        companyId,
+        event: NotificationEvent.NOTE_ISSUED,
+        title: `${labelFor(input.noteType)} ${created.noteNumber} issued`,
+        body: formatMoney(computed.grandTotal),
+        link: linkedInvoice ? `/invoices/${linkedInvoice.id}` : undefined,
+        actorUserId: context.userId
       });
     }
 
@@ -469,7 +483,9 @@ export class CreditDebitNoteService {
 
       const computed = computeDocument(this.normaliseItems(input.items), {
         isIgst: supply.isIgst,
-        enableRoundOff: settings.enableRoundOff
+        enableRoundOff: settings.enableRoundOff,
+        gstEnabled: settings.gstEnabled,
+        pricesIncludeTax: settings.pricesIncludeTax
       });
 
       if (linkedInvoice && existing.noteType === NoteType.CREDIT) {

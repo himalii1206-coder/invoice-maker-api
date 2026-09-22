@@ -10,6 +10,8 @@ import reportRoutes from './report.js';
 import companyRoutes from './company.js';
 import vendorRoutes from './vendor.js';
 import purchaseBillRoutes from './purchaseBill.js';
+import teamRoutes from './team.js';
+import notificationRoutes from './notification.js';
 
 const router = Router();
 
@@ -24,6 +26,8 @@ router.use('/payments', paymentRoutes);
 router.use('/invoice-settings', invoiceSettingsRoutes);
 router.use('/reports', reportRoutes);
 router.use('/company', companyRoutes);
+router.use('/team', teamRoutes);
+router.use('/notifications', notificationRoutes);
 
 export default router;
 

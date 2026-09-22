@@ -1,4 +1,4 @@
-import { Prisma, NumberResetMode } from '@prisma/client';
+import { Prisma, NumberResetMode, NotificationEvent } from '@prisma/client';
 import { prisma } from '../config/database.js';
 import { AppError } from '../utils/error.js';
 
@@ -32,12 +32,31 @@ export const invoiceSettingsSelect = {
   defaultNotes: true,
   themeColor: true,
   template: true,
+  fontFamily: true,
+  tableStyle: true,
+  signaturePosition: true,
   showHsnColumn: true,
   showDiscount: true,
   showBankDetails: true,
   showSignature: true,
   signatureUrl: true,
   footerNote: true,
+  gstEnabled: true,
+  pricesIncludeTax: true,
+  enableReverseCharge: true,
+  hsnRequiredOnProduct: true,
+  customerCodePrefix: true,
+  customerCreditDays: true,
+  customerRequirePhone: true,
+  customerRequireState: true,
+  customerRequireGstin: true,
+  productCodePrefix: true,
+  defaultUnit: true,
+  defaultDiscountMode: true,
+  notifyEvents: true,
+  notifyEmail: true,
+  notifyInApp: true,
+  notifyBrowser: true,
   enableRoundOff: true,
   autoMarkOverdue: true,
   remindersEnabled: true,
@@ -72,12 +91,31 @@ export interface UpdateInvoiceSettingsInput {
   defaultNotes?: string | null;
   themeColor?: string;
   template?: string;
+  fontFamily?: string;
+  tableStyle?: string;
+  signaturePosition?: string;
   showHsnColumn?: boolean;
   showDiscount?: boolean;
   showBankDetails?: boolean;
   showSignature?: boolean;
   signatureUrl?: string | null;
   footerNote?: string | null;
+  gstEnabled?: boolean;
+  pricesIncludeTax?: boolean;
+  enableReverseCharge?: boolean;
+  hsnRequiredOnProduct?: boolean;
+  customerCodePrefix?: string;
+  customerCreditDays?: number;
+  customerRequirePhone?: boolean;
+  customerRequireState?: boolean;
+  customerRequireGstin?: boolean;
+  productCodePrefix?: string;
+  defaultUnit?: string;
+  defaultDiscountMode?: string;
+  notifyEvents?: NotificationEvent[];
+  notifyEmail?: boolean;
+  notifyInApp?: boolean;
+  notifyBrowser?: boolean;
   enableRoundOff?: boolean;
   autoMarkOverdue?: boolean;
   remindersEnabled?: boolean;
@@ -162,7 +200,7 @@ export class InvoiceSettingsService {
     // fields it did not mention.
     const data: Prisma.InvoiceSettingsUpdateInput = {};
     const assign = <K extends keyof UpdateInvoiceSettingsInput>(key: K) => {
-      if (key in input) {
+      if (key in input && input[key] !== undefined) {
         (data as Record<string, unknown>)[key] = input[key];
       }
     };
@@ -185,12 +223,31 @@ export class InvoiceSettingsService {
         'defaultNotes',
         'themeColor',
         'template',
+        'fontFamily',
+        'tableStyle',
+        'signaturePosition',
         'showHsnColumn',
         'showDiscount',
         'showBankDetails',
         'showSignature',
         'signatureUrl',
         'footerNote',
+        'gstEnabled',
+        'pricesIncludeTax',
+        'enableReverseCharge',
+        'hsnRequiredOnProduct',
+        'customerCodePrefix',
+        'customerCreditDays',
+        'customerRequirePhone',
+        'customerRequireState',
+        'customerRequireGstin',
+        'productCodePrefix',
+        'defaultUnit',
+        'defaultDiscountMode',
+        'notifyEvents',
+        'notifyEmail',
+        'notifyInApp',
+        'notifyBrowser',
         'enableRoundOff',
         'autoMarkOverdue',
         'remindersEnabled',

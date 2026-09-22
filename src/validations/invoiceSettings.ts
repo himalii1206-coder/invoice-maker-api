@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { NumberResetMode } from '@prisma/client';
+import { NumberResetMode, NotificationEvent } from '@prisma/client';
 
 const optionalText = (max: number, label: string) =>
   z
@@ -7,8 +7,20 @@ const optionalText = (max: number, label: string) =>
     .trim()
     .max(max, `${label} must be at most ${max} characters`)
     .optional()
+    .nullable()
     .or(z.literal(''))
-    .transform((v) => (v === '' ? null : v));
+    .transform((v) => (v === undefined ? undefined : v === '' || v === null ? null : v));
+
+/** Codes are used to build identifiers like CUST-0001, so keep them terse. */
+const codePrefix = (label: string) =>
+  z
+    .string()
+    .trim()
+    .min(1, `${label} is required`)
+    .max(8, `${label} must be at most 8 characters`)
+    .regex(/^[A-Za-z0-9]+$/, `${label} can only contain letters and numbers`)
+    .toUpperCase()
+    .optional();
 
 /** Day offsets for reminders; de-duplicated and capped so a save cannot spam. */
 const dayOffsets = z
@@ -24,7 +36,7 @@ export const updateInvoiceSettingsSchema = z.object({
         .trim()
         .min(1, 'Invoice prefix is required')
         .max(12, 'Invoice prefix must be at most 12 characters')
-        .regex(/^[A-Za-z0-9]+$/, 'Invoice prefix can only contain letters and numbers')
+        .regex(/^[A-Za-z0-9_\-\/]+$/, 'Invoice prefix can only contain letters, numbers, hyphens or slashes')
         .optional(),
       invoiceSuffix: optionalText(12, 'Invoice suffix'),
       creditNotePrefix: z
@@ -32,14 +44,14 @@ export const updateInvoiceSettingsSchema = z.object({
         .trim()
         .min(1, 'Credit note prefix is required')
         .max(12, 'Credit note prefix must be at most 12 characters')
-        .regex(/^[A-Za-z0-9]+$/, 'Credit note prefix can only contain letters and numbers')
+        .regex(/^[A-Za-z0-9_\-\/]+$/, 'Credit note prefix can only contain letters, numbers, hyphens or slashes')
         .optional(),
       debitNotePrefix: z
         .string()
         .trim()
         .min(1, 'Debit note prefix is required')
         .max(12, 'Debit note prefix must be at most 12 characters')
-        .regex(/^[A-Za-z0-9]+$/, 'Debit note prefix can only contain letters and numbers')
+        .regex(/^[A-Za-z0-9_\-\/]+$/, 'Debit note prefix can only contain letters, numbers, hyphens or slashes')
         .optional(),
       numberSeparator: z
         .enum(['-', '/', '_', ''], {
@@ -87,12 +99,52 @@ export const updateInvoiceSettingsSchema = z.object({
         .regex(/^#[0-9a-fA-F]{6}$/, 'Theme colour must be a hex value like #7c4a27')
         .optional(),
       template: z.enum(['classic', 'modern', 'minimal']).optional(),
+      // Only the PDF core families are offered: anything else would need a font
+      // file shipped with the server, and would silently fall back otherwise.
+      fontFamily: z.enum(['HELVETICA', 'TIMES', 'COURIER']).optional(),
+      tableStyle: z.enum(['grid', 'minimal', 'striped']).optional(),
+      signaturePosition: z.enum(['left', 'right']).optional(),
       showHsnColumn: z.boolean().optional(),
       showDiscount: z.boolean().optional(),
       showBankDetails: z.boolean().optional(),
       showSignature: z.boolean().optional(),
       signatureUrl: optionalText(500, 'Signature URL'),
       footerNote: optionalText(300, 'Footer note'),
+
+      gstEnabled: z.boolean().optional(),
+      pricesIncludeTax: z.boolean().optional(),
+      enableReverseCharge: z.boolean().optional(),
+      hsnRequiredOnProduct: z.boolean().optional(),
+
+      customerCodePrefix: codePrefix('Customer code prefix'),
+      customerCreditDays: z.coerce
+        .number()
+        .int()
+        .min(0, 'Credit period cannot be negative')
+        .max(365, 'Credit period cannot exceed 365 days')
+        .optional(),
+      customerRequirePhone: z.boolean().optional(),
+      customerRequireState: z.boolean().optional(),
+      customerRequireGstin: z.boolean().optional(),
+
+      productCodePrefix: codePrefix('Product code prefix'),
+      defaultUnit: z
+        .string()
+        .trim()
+        .min(1, 'Default unit is required')
+        .max(12, 'Default unit must be at most 12 characters')
+        .toUpperCase()
+        .optional(),
+      defaultDiscountMode: z.enum(['PERCENT', 'FIXED']).optional(),
+
+      notifyEvents: z
+        .array(z.nativeEnum(NotificationEvent))
+        .max(20, 'Too many notification events')
+        .transform((values) => Array.from(new Set(values)))
+        .optional(),
+      notifyEmail: z.boolean().optional(),
+      notifyInApp: z.boolean().optional(),
+      notifyBrowser: z.boolean().optional(),
 
       enableRoundOff: z.boolean().optional(),
       autoMarkOverdue: z.boolean().optional(),

@@ -1,15 +1,16 @@
 import { z } from 'zod';
 import { PaymentMethod } from '@prisma/client';
 
-/** Turns "" into undefined so optional text fields can be cleared from a form. */
+/** Turns "" or null into undefined so optional text fields can be cleared from a form. */
 const optionalText = (max: number, label: string) =>
   z
     .string()
     .trim()
     .max(max, `${label} must be at most ${max} characters`)
     .optional()
+    .nullable()
     .or(z.literal(''))
-    .transform((v) => (v === '' ? undefined : v));
+    .transform((v) => (v === '' || v === null || v === undefined ? undefined : v));
 
 const amountField = z.coerce
   .number({ invalid_type_error: 'Amount must be a number' })

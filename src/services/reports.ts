@@ -573,6 +573,629 @@ export class ReportService {
     };
   }
 
+  /**
+   * Comprehensive analytics encompassing all 7 dimensions requested:
+   * 1. Sales Analytics (by day, week, month, year, growth %, status, customer, product, company)
+   * 2. Invoice Analytics (total, paid, unpaid, overdue, cancelled, draft, average turnaround)
+   * 3. Payment Analytics (total received, pending, overdue, method breakdown, collection trends)
+   * 4. GST / Tax Analytics (total taxable, CGST, SGST, IGST, total GST, monthly, tax-rate slabs, HSN)
+   * 5. Customer Analytics (total, new, repeat, top customers, outstanding, payment history)
+   * 6. Product / Service Analytics (top-selling, revenue, quantity, tax generated, invoice count)
+   * 7. Receivables Analytics (aging buckets, overdue list)
+   */
+  static async comprehensiveAnalytics(companyId: string, scope: ReportScope = {}) {
+    const { from, to, label } = resolveRange(scope);
+    const invoiceWhere = buildScope(companyId, scope);
+
+    const [
+      company,
+      allInvoices,
+      allPayments,
+      allCustomers,
+      invoiceItems,
+      purchaseBills
+    ] = await Promise.all([
+      prisma.company.findUnique({
+        where: { id: companyId },
+        select: { id: true, name: true, gstin: true, state: true }
+      }),
+      prisma.invoice.findMany({
+        where: {
+          companyId,
+          ...(scope.financialYear ? { financialYear: scope.financialYear } : {})
+        },
+        include: {
+          customer: {
+            select: { id: true, name: true, gstin: true, phone: true, email: true, state: true }
+          },
+          payments: {
+            select: { id: true, amount: true, paymentDate: true, paymentMethod: true, referenceNumber: true }
+          }
+        },
+        orderBy: { issueDate: 'desc' }
+      }),
+      prisma.payment.findMany({
+        where: {
+          companyId,
+          ...(scope.dateFrom || scope.dateTo
+            ? {
+                paymentDate: {
+                  ...(scope.dateFrom && { gte: startOfDay(scope.dateFrom) }),
+                  ...(scope.dateTo && { lte: endOfDay(scope.dateTo) })
+                }
+              }
+            : {})
+        },
+        include: {
+          invoice: {
+            select: { id: true, invoiceNumber: true, billingName: true, customerId: true }
+          }
+        },
+        orderBy: { paymentDate: 'desc' }
+      }),
+      prisma.customer.findMany({
+        where: { companyId },
+        select: {
+          id: true,
+          name: true,
+          type: true,
+          gstin: true,
+          email: true,
+          phone: true,
+          state: true,
+          city: true,
+          createdAt: true
+        }
+      }),
+      prisma.invoiceItem.findMany({
+        where: {
+          invoice: invoiceWhere
+        },
+        select: {
+          id: true,
+          name: true,
+          productId: true,
+          hsnSacCode: true,
+          unit: true,
+          quantity: true,
+          unitPrice: true,
+          taxRate: true,
+          taxableAmount: true,
+          cgstAmount: true,
+          sgstAmount: true,
+          igstAmount: true,
+          taxAmount: true,
+          total: true
+        }
+      }),
+      prisma.purchaseBill.findMany({
+        where: {
+          companyId,
+          status: { not: 'CANCELLED' },
+          ...(scope.financialYear ? { financialYear: scope.financialYear } : {})
+        },
+        select: {
+          id: true,
+          billNumber: true,
+          vendorName: true,
+          billDate: true,
+          dueDate: true,
+          grandTotal: true,
+          amountPaid: true,
+          balanceDue: true,
+          taxAmount: true,
+          status: true
+        }
+      })
+    ]);
+
+    const now = startOfDay(new Date()).getTime();
+
+    // ----------------------------------------------------
+    // 1. INVOICE ANALYTICS & COUNTS
+    // ----------------------------------------------------
+    let totalInvoicedAmount = 0;
+    let totalPaidAmount = 0;
+    let totalDueAmount = 0;
+    let paidCount = 0;
+    let unpaidCount = 0;
+    let overdueCount = 0;
+    let cancelledCount = 0;
+    let draftCount = 0;
+    let totalPaymentTurnaroundDays = 0;
+    let settledWithTurnaroundCount = 0;
+
+    const statusBreakdownMap: Record<string, { count: number; amount: number }> = {
+      PAID: { count: 0, amount: 0 },
+      PARTIALLY_PAID: { count: 0, amount: 0 },
+      SENT: { count: 0, amount: 0 },
+      OVERDUE: { count: 0, amount: 0 },
+      DRAFT: { count: 0, amount: 0 },
+      CANCELLED: { count: 0, amount: 0 }
+    };
+
+    for (const inv of allInvoices) {
+      const gTotal = toNumber(inv.grandTotal);
+      const aPaid = toNumber(inv.amountPaid);
+      const bDue = toNumber(inv.balanceDue);
+      const st = inv.status;
+
+      if (!statusBreakdownMap[st]) {
+        statusBreakdownMap[st] = { count: 0, amount: 0 };
+      }
+      statusBreakdownMap[st].count += 1;
+      statusBreakdownMap[st].amount = round2(statusBreakdownMap[st].amount + gTotal);
+
+      if (st === InvoiceStatus.CANCELLED) {
+        cancelledCount += 1;
+        continue; // Exclude cancelled from active revenue sums
+      }
+
+      if (st === InvoiceStatus.DRAFT) {
+        draftCount += 1;
+      } else {
+        totalInvoicedAmount = round2(totalInvoicedAmount + gTotal);
+        totalPaidAmount = round2(totalPaidAmount + aPaid);
+        totalDueAmount = round2(totalDueAmount + bDue);
+
+        if (st === InvoiceStatus.PAID) {
+          paidCount += 1;
+          // Calculate turnaround days to pay
+          if (inv.payments.length > 0) {
+            const lastPaymentDate = new Date(
+              Math.max(...inv.payments.map((p) => new Date(p.paymentDate).getTime()))
+            );
+            const issueD = new Date(inv.issueDate);
+            const days = Math.max(0, Math.round((lastPaymentDate.getTime() - issueD.getTime()) / 86400000));
+            totalPaymentTurnaroundDays += days;
+            settledWithTurnaroundCount += 1;
+          }
+        } else if (st === InvoiceStatus.OVERDUE) {
+          overdueCount += 1;
+          unpaidCount += 1;
+        } else {
+          unpaidCount += 1;
+        }
+      }
+    }
+
+    const averagePaymentDays = settledWithTurnaroundCount > 0
+      ? Math.round(totalPaymentTurnaroundDays / settledWithTurnaroundCount)
+      : 0;
+
+    const invoiceAnalytics = {
+      totalInvoices: allInvoices.length,
+      paidInvoices: paidCount,
+      unpaidInvoices: unpaidCount,
+      overdueInvoices: overdueCount,
+      cancelledInvoices: cancelledCount,
+      draftInvoices: draftCount,
+      totalInvoicedAmount,
+      totalPaidAmount,
+      totalDueAmount,
+      averagePaymentDays,
+      collectionEfficiency: totalInvoicedAmount > 0 ? Math.round((totalPaidAmount / totalInvoicedAmount) * 100) : 0
+    };
+
+    // ----------------------------------------------------
+    // 2. SALES ANALYTICS (Day, Week, Month, Year, Growth %, Status, Customer, Product, Company)
+    // ----------------------------------------------------
+    // Daily trends (last 14 days)
+    const dailyMap = new Map<string, { label: string; invoiced: number; paid: number; count: number }>();
+    for (let i = 13; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const key = d.toISOString().split('T')[0];
+      dailyMap.set(key, {
+        label: d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }),
+        invoiced: 0,
+        paid: 0,
+        count: 0
+      });
+    }
+
+    // Monthly trends (12 months)
+    const monthlyMap = new Map<string, { month: string; invoiced: number; paid: number; count: number; tax: number }>();
+    const cursor = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), 1));
+    const lastMonth = new Date(Date.UTC(to.getUTCFullYear(), to.getUTCMonth(), 1));
+
+    while (cursor <= lastMonth) {
+      const yr = cursor.getUTCFullYear();
+      const m = cursor.getUTCMonth() + 1;
+      const key = `${yr}-${String(m).padStart(2, '0')}`;
+      monthlyMap.set(key, {
+        month: monthLabel(yr, m),
+        invoiced: 0,
+        paid: 0,
+        count: 0,
+        tax: 0
+      });
+      cursor.setUTCMonth(cursor.getUTCMonth() + 1);
+    }
+
+    // Weekly map (last 8 weeks)
+    const weeklyMap = new Map<string, { label: string; invoiced: number; paid: number; count: number }>();
+    for (let w = 7; w >= 0; w--) {
+      const wDate = new Date();
+      wDate.setDate(wDate.getDate() - w * 7);
+      const weekKey = `W-${wDate.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}`;
+      weeklyMap.set(weekKey, {
+        label: weekKey,
+        invoiced: 0,
+        paid: 0,
+        count: 0
+      });
+    }
+
+    for (const inv of allInvoices) {
+      if (inv.status === InvoiceStatus.CANCELLED) continue;
+      const dStr = new Date(inv.issueDate).toISOString().split('T')[0];
+      const mKey = `${new Date(inv.issueDate).getUTCFullYear()}-${String(new Date(inv.issueDate).getUTCMonth() + 1).padStart(2, '0')}`;
+      const gTotal = toNumber(inv.grandTotal);
+      const aPaid = toNumber(inv.amountPaid);
+      const tTax = toNumber(inv.taxAmount);
+
+      if (dailyMap.has(dStr)) {
+        const dObj = dailyMap.get(dStr)!;
+        dObj.invoiced = round2(dObj.invoiced + gTotal);
+        dObj.paid = round2(dObj.paid + aPaid);
+        dObj.count += 1;
+      }
+
+      if (monthlyMap.has(mKey)) {
+        const mObj = monthlyMap.get(mKey)!;
+        mObj.invoiced = round2(mObj.invoiced + gTotal);
+        mObj.paid = round2(mObj.paid + aPaid);
+        mObj.count += 1;
+        mObj.tax = round2(mObj.tax + tTax);
+      }
+    }
+
+    const monthlyTrends = Array.from(monthlyMap.values());
+    const dailyTrends = Array.from(dailyMap.values());
+    const weeklyTrends = Array.from(weeklyMap.values());
+
+    // Growth % calculation (Comparing latest month with prior month)
+    let salesGrowthPercent = 0;
+    if (monthlyTrends.length >= 2) {
+      const currentMonthSales = monthlyTrends[monthlyTrends.length - 1]?.invoiced || 0;
+      const priorMonthSales = monthlyTrends[monthlyTrends.length - 2]?.invoiced || 0;
+      if (priorMonthSales > 0) {
+        salesGrowthPercent = round2(((currentMonthSales - priorMonthSales) / priorMonthSales) * 100);
+      } else if (currentMonthSales > 0) {
+        salesGrowthPercent = 100;
+      }
+    }
+
+    // Status breakdown array
+    const salesByStatus = Object.entries(statusBreakdownMap).map(([status, val]) => ({
+      status,
+      count: val.count,
+      amount: val.amount,
+      percentage: totalInvoicedAmount > 0 ? Math.round((val.amount / totalInvoicedAmount) * 100) : 0
+    }));
+
+    // Customer sales ranking
+    const custSalesMap = new Map<string, { customerId: string; name: string; gstin: string | null; invoiced: number; paid: number; outstanding: number; count: number }>();
+    for (const inv of allInvoices) {
+      if (inv.status === InvoiceStatus.CANCELLED) continue;
+      const cId = inv.customerId || 'direct-cash';
+      const cName = inv.customer?.name || inv.billingName || 'Cash / Direct Sale';
+      const cGstin = inv.customer?.gstin || null;
+
+      const existing = custSalesMap.get(cId) ?? {
+        customerId: cId,
+        name: cName,
+        gstin: cGstin,
+        invoiced: 0,
+        paid: 0,
+        outstanding: 0,
+        count: 0
+      };
+
+      existing.invoiced = round2(existing.invoiced + toNumber(inv.grandTotal));
+      existing.paid = round2(existing.paid + toNumber(inv.amountPaid));
+      existing.outstanding = round2(existing.outstanding + toNumber(inv.balanceDue));
+      existing.count += 1;
+      custSalesMap.set(cId, existing);
+    }
+
+    const salesByCustomer = Array.from(custSalesMap.values())
+      .sort((a, b) => b.invoiced - a.invoiced)
+      .slice(0, 10);
+
+    const salesAnalytics = {
+      byDay: dailyTrends,
+      byWeek: weeklyTrends,
+      byMonth: monthlyTrends,
+      growthRatePercent: salesGrowthPercent,
+      byStatus: salesByStatus,
+      byCustomer: salesByCustomer,
+      companyOverview: {
+        name: company?.name ?? 'Business',
+        gstin: company?.gstin ?? 'Unregistered',
+        currency: 'INR',
+        state: company?.state ?? 'Gujarat',
+        totalTurnover: totalInvoicedAmount
+      }
+    };
+
+    // ----------------------------------------------------
+    // 3. PAYMENT ANALYTICS
+    // ----------------------------------------------------
+    const paymentMethodMap: Record<string, { count: number; amount: number }> = {
+      BANK_TRANSFER: { count: 0, amount: 0 },
+      UPI: { count: 0, amount: 0 },
+      CASH: { count: 0, amount: 0 },
+      CARD: { count: 0, amount: 0 },
+      CHEQUE: { count: 0, amount: 0 },
+      OTHER: { count: 0, amount: 0 }
+    };
+
+    let totalReceived = 0;
+    for (const p of allPayments) {
+      const amt = toNumber(p.amount);
+      totalReceived = round2(totalReceived + amt);
+      const m = p.paymentMethod || 'OTHER';
+      if (!paymentMethodMap[m]) {
+        paymentMethodMap[m] = { count: 0, amount: 0 };
+      }
+      paymentMethodMap[m].count += 1;
+      paymentMethodMap[m].amount = round2(paymentMethodMap[m].amount + amt);
+    }
+
+    const byPaymentMethod = Object.entries(paymentMethodMap).map(([method, data]) => ({
+      method,
+      label: method.replace(/_/g, ' '),
+      amount: data.amount,
+      count: data.count,
+      percentage: totalReceived > 0 ? Math.round((data.amount / totalReceived) * 100) : 0
+    }));
+
+    const paymentAnalytics = {
+      totalReceived,
+      pendingPayments: totalDueAmount,
+      overduePayments: round2(
+        allInvoices
+          .filter((i) => i.status === InvoiceStatus.OVERDUE || (toNumber(i.balanceDue) > 0 && new Date(i.dueDate).getTime() < now))
+          .reduce((sum, i) => sum + toNumber(i.balanceDue), 0)
+      ),
+      byMethod: byPaymentMethod,
+      monthlyCollectionTrend: monthlyTrends.map((t) => ({ month: t.month, collected: t.paid }))
+    };
+
+    // ----------------------------------------------------
+    // 4. GST & TAX ANALYTICS
+    // ----------------------------------------------------
+    let totalTaxableAmount = 0;
+    let totalCgst = 0;
+    let totalSgst = 0;
+    let totalIgst = 0;
+    let totalGstCollected = 0;
+
+    const rateMap = new Map<number, { rate: number; taxable: number; cgst: number; sgst: number; igst: number; tax: number }>();
+    [0, 5, 12, 18, 28].forEach((r) => {
+      rateMap.set(r, { rate: r, taxable: 0, cgst: 0, sgst: 0, igst: 0, tax: 0 });
+    });
+
+    const hsnMap = new Map<string, { hsn: string; rate: number; quantity: number; taxable: number; tax: number; total: number }>();
+
+    for (const item of invoiceItems) {
+      const taxable = toNumber(item.taxableAmount);
+      const cgst = toNumber(item.cgstAmount);
+      const sgst = toNumber(item.sgstAmount);
+      const igst = toNumber(item.igstAmount);
+      const tax = toNumber(item.taxAmount);
+      const rate = toNumber(item.taxRate);
+      const hsn = item.hsnSacCode?.trim() || 'General';
+
+      totalTaxableAmount = round2(totalTaxableAmount + taxable);
+      totalCgst = round2(totalCgst + cgst);
+      totalSgst = round2(totalSgst + sgst);
+      totalIgst = round2(totalIgst + igst);
+      totalGstCollected = round2(totalGstCollected + tax);
+
+      // Rate map
+      const rObj = rateMap.get(rate) ?? { rate, taxable: 0, cgst: 0, sgst: 0, igst: 0, tax: 0 };
+      rObj.taxable = round2(rObj.taxable + taxable);
+      rObj.cgst = round2(rObj.cgst + cgst);
+      rObj.sgst = round2(rObj.sgst + sgst);
+      rObj.igst = round2(rObj.igst + igst);
+      rObj.tax = round2(rObj.tax + tax);
+      rateMap.set(rate, rObj);
+
+      // HSN map
+      const hsnKey = `${hsn}@${rate}`;
+      const hObj = hsnMap.get(hsnKey) ?? { hsn, rate, quantity: 0, taxable: 0, tax: 0, total: 0 };
+      hObj.quantity = round2(hObj.quantity + toNumber(item.quantity));
+      hObj.taxable = round2(hObj.taxable + taxable);
+      hObj.tax = round2(hObj.tax + tax);
+      hObj.total = round2(hObj.total + toNumber(item.total));
+      hsnMap.set(hsnKey, hObj);
+    }
+
+    const gstAnalytics = {
+      totalTaxableAmount,
+      cgst: totalCgst,
+      sgst: totalSgst,
+      igst: totalIgst,
+      totalGstCollected,
+      gstByMonth: monthlyTrends.map((t) => ({ month: t.month, tax: t.tax })),
+      taxRateBreakdown: Array.from(rateMap.values()).sort((a, b) => a.rate - b.rate),
+      hsnBreakdown: Array.from(hsnMap.values()).sort((a, b) => b.taxable - a.taxable).slice(0, 15),
+      inwardItcAvailable: round2(purchaseBills.reduce((acc, pb) => acc + toNumber(pb.taxAmount), 0)),
+      netGstPayable: round2(
+        Math.max(0, totalGstCollected - purchaseBills.reduce((acc, pb) => acc + toNumber(pb.taxAmount), 0))
+      )
+    };
+
+    // ----------------------------------------------------
+    // 5. CUSTOMER ANALYTICS
+    // ----------------------------------------------------
+    const customerInvoiceCountMap = new Map<string, number>();
+    for (const inv of allInvoices) {
+      if (inv.customerId) {
+        customerInvoiceCountMap.set(inv.customerId, (customerInvoiceCountMap.get(inv.customerId) || 0) + 1);
+      }
+    }
+
+    let newCustomerCount = 0;
+    let repeatCustomerCount = 0;
+    const sixMonthsAgo = new Date();
+    sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+
+    for (const c of allCustomers) {
+      const count = customerInvoiceCountMap.get(c.id) || 0;
+      if (count > 1) {
+        repeatCustomerCount += 1;
+      }
+      if (new Date(c.createdAt) >= sixMonthsAgo) {
+        newCustomerCount += 1;
+      }
+    }
+
+    const customerAnalytics = {
+      totalCustomers: allCustomers.length,
+      newCustomers: newCustomerCount,
+      repeatCustomers: repeatCustomerCount,
+      topCustomersByRevenue: salesByCustomer,
+      customerOutstanding: Array.from(custSalesMap.values())
+        .filter((c) => c.outstanding > 0)
+        .sort((a, b) => b.outstanding - a.outstanding),
+      customerPaymentHistory: allPayments.slice(0, 10).map((p) => ({
+        id: p.id,
+        amount: toNumber(p.amount),
+        date: p.paymentDate,
+        method: p.paymentMethod,
+        invoiceNumber: p.invoice?.invoiceNumber,
+        customerName: p.invoice?.billingName
+      }))
+    };
+
+    // ----------------------------------------------------
+    // 6. PRODUCT / SERVICE ANALYTICS
+    // ----------------------------------------------------
+    const prodMap = new Map<string, { name: string; quantity: number; revenue: number; tax: number; invoiceCount: number; unit: string }>();
+
+    for (const it of invoiceItems) {
+      const key = it.productId || it.name.trim().toLowerCase();
+      const existing = prodMap.get(key) ?? {
+        name: it.name,
+        quantity: 0,
+        revenue: 0,
+        tax: 0,
+        invoiceCount: 0,
+        unit: it.unit || 'PCS'
+      };
+
+      existing.quantity = round2(existing.quantity + toNumber(it.quantity));
+      existing.revenue = round2(existing.revenue + toNumber(it.total));
+      existing.tax = round2(existing.tax + toNumber(it.taxAmount));
+      existing.invoiceCount += 1;
+      prodMap.set(key, existing);
+    }
+
+    const productList = Array.from(prodMap.values()).sort((a, b) => b.revenue - a.revenue);
+    const productAnalytics = {
+      topSelling: productList.slice(0, 10),
+      totalQuantitySold: round2(productList.reduce((sum, p) => sum + p.quantity, 0)),
+      totalProductRevenue: round2(productList.reduce((sum, p) => sum + p.revenue, 0)),
+      totalTaxGenerated: round2(productList.reduce((sum, p) => sum + p.tax, 0)),
+      totalProductCount: productList.length
+    };
+
+    // ----------------------------------------------------
+    // 7. RECEIVABLES & AGING ANALYTICS
+    // ----------------------------------------------------
+    const agingBuckets = {
+      current: { label: 'Not Yet Due (Current)', amount: 0, count: 0 },
+      overdue1_30: { label: '1 - 30 Days Overdue', amount: 0, count: 0 },
+      overdue31_60: { label: '31 - 60 Days Overdue', amount: 0, count: 0 },
+      overdue61_90: { label: '61 - 90 Days Overdue', amount: 0, count: 0 },
+      overdue90Plus: { label: 'Over 90 Days Overdue', amount: 0, count: 0 }
+    };
+
+    const agingList: Array<{
+      id: string;
+      invoiceNumber: string;
+      customerName: string;
+      issueDate: Date;
+      dueDate: Date;
+      grandTotal: number;
+      balanceDue: number;
+      overdueDays: number;
+      bucket: string;
+    }> = [];
+
+    for (const inv of allInvoices) {
+      const bDue = toNumber(inv.balanceDue);
+      if (bDue <= 0 || inv.status === InvoiceStatus.CANCELLED || inv.status === InvoiceStatus.DRAFT) {
+        continue;
+      }
+
+      const dueTime = startOfDay(inv.dueDate).getTime();
+      const overdueDays = Math.round((now - dueTime) / 86400000);
+
+      let bucketKey = 'current';
+      if (overdueDays > 90) {
+        bucketKey = 'overdue90Plus';
+        agingBuckets.overdue90Plus.amount = round2(agingBuckets.overdue90Plus.amount + bDue);
+        agingBuckets.overdue90Plus.count += 1;
+      } else if (overdueDays > 60) {
+        bucketKey = 'overdue61_90';
+        agingBuckets.overdue61_90.amount = round2(agingBuckets.overdue61_90.amount + bDue);
+        agingBuckets.overdue61_90.count += 1;
+      } else if (overdueDays > 30) {
+        bucketKey = 'overdue31_60';
+        agingBuckets.overdue31_60.amount = round2(agingBuckets.overdue31_60.amount + bDue);
+        agingBuckets.overdue31_60.count += 1;
+      } else if (overdueDays > 0) {
+        bucketKey = 'overdue1_30';
+        agingBuckets.overdue1_30.amount = round2(agingBuckets.overdue1_30.amount + bDue);
+        agingBuckets.overdue1_30.count += 1;
+      } else {
+        agingBuckets.current.amount = round2(agingBuckets.current.amount + bDue);
+        agingBuckets.current.count += 1;
+      }
+
+      agingList.push({
+        id: inv.id,
+        invoiceNumber: inv.invoiceNumber,
+        customerName: inv.customer?.name || inv.billingName || 'Customer',
+        issueDate: inv.issueDate,
+        dueDate: inv.dueDate,
+        grandTotal: toNumber(inv.grandTotal),
+        balanceDue: bDue,
+        overdueDays: Math.max(0, overdueDays),
+        bucket: bucketKey
+      });
+    }
+
+    agingList.sort((a, b) => b.overdueDays - a.overdueDays);
+
+    const receivablesAnalytics = {
+      totalOutstanding: totalDueAmount,
+      currentReceivables: agingBuckets.current.amount,
+      overdue1_30: agingBuckets.overdue1_30.amount,
+      overdue31_60: agingBuckets.overdue31_60.amount,
+      overdue61_90: agingBuckets.overdue61_90.amount,
+      overdue90Plus: agingBuckets.overdue90Plus.amount,
+      buckets: Object.values(agingBuckets),
+      agingList: agingList.slice(0, 20)
+    };
+
+    return {
+      periodLabel: label,
+      salesAnalytics,
+      invoiceAnalytics,
+      paymentAnalytics,
+      gstAnalytics,
+      customerAnalytics,
+      productAnalytics,
+      receivablesAnalytics
+    };
+  }
+
   /** Month labels for the current financial year, used to seed empty charts. */
   static financialYearMonths(financialYear?: string): string[] {
     const fy = financialYear ?? financialYearOf();

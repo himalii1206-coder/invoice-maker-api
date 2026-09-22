@@ -5,6 +5,7 @@ import { InvoiceEmailService } from '../services/invoiceEmail.js';
 import { validate } from '../middleware/validate.js';
 import { authenticate } from '../middleware/auth.js';
 import { resolveCompany } from '../middleware/company.js';
+import { requirePermission } from '../middleware/permissions.js';
 import { updateInvoiceSettingsSchema } from '../validations/invoiceSettings.js';
 import { sendResponse } from '../utils/response.js';
 import { AuthRequest } from '../types/index.js';
@@ -35,6 +36,7 @@ router.get('/', async (req: AuthRequest, res: Response, next: NextFunction) => {
 
 router.put(
   '/',
+  requirePermission('settings:write'),
   validate(updateInvoiceSettingsSchema),
   async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {

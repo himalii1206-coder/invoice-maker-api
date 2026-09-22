@@ -112,15 +112,50 @@ const clampPercent = (value: number | undefined, max: number): number => {
   return Math.min(parsed, max);
 };
 
+/**
+ * How the entered unit price relates to tax, and whether GST applies at all.
+ * Both come from the business's settings and are threaded through every
+ * calculation so a preview and a saved document can never disagree.
+ */
+export interface TaxMode {
+  /** False when the business is not GST registered; every line is taxed at 0%. */
+  gstEnabled?: boolean;
+  /** True when entered prices already contain the tax. */
+  pricesIncludeTax?: boolean;
+}
+
 /** Computes a single line. Exported for previews and unit-level reuse. */
-export const computeLine = (input: TaxLineInput, isIgst: boolean): ComputedTaxLine => {
+export const computeLine = (
+  input: TaxLineInput,
+  isIgst: boolean,
+  mode: TaxMode = {}
+): ComputedTaxLine => {
+  const { gstEnabled = true, pricesIncludeTax = false } = mode;
+
   const quantity = round3(Math.max(0, toNumber(input.quantity)));
-  const unitPrice = round2(Math.max(0, toNumber(input.unitPrice)));
+  const enteredPrice = round2(Math.max(0, toNumber(input.unitPrice)));
   const discountPercent = clampPercent(input.discountPercent, 100);
-  const taxRate = clampPercent(input.taxRate, 100);
+  const taxRate = gstEnabled ? clampPercent(input.taxRate, 100) : 0;
 
   // Quantity carries 3dp, so multiply in paise and round once.
-  const grossPaise = Math.round(toPaise(unitPrice) * quantity);
+  const enteredGrossPaise = Math.round(toPaise(enteredPrice) * quantity);
+
+  // In tax-inclusive mode the entered figure already contains the GST, so the
+  // tax is backed out at the line level before anything else happens. Doing it
+  // here - rather than adjusting the total at the end - keeps every downstream
+  // invariant intact: subtotal - discount = taxable, and taxable + tax = total.
+  const grossPaise =
+    pricesIncludeTax && taxRate > 0
+      ? Math.round(enteredGrossPaise / (1 + taxRate / 100))
+      : enteredGrossPaise;
+
+  // The rate column has to multiply out to the subtotal on the printed
+  // document, so it shows the tax-exclusive rate once the tax is removed.
+  const unitPrice =
+    pricesIncludeTax && taxRate > 0 && quantity > 0
+      ? round2(fromPaise(grossPaise) / quantity)
+      : enteredPrice;
+
   const discountPaise = percentOfPaise(grossPaise, discountPercent);
   const taxablePaise = grossPaise - discountPaise;
 
@@ -167,13 +202,13 @@ export const computeLine = (input: TaxLineInput, isIgst: boolean): ComputedTaxLi
  */
 export const computeDocument = <T extends TaxLineInput>(
   lines: T[],
-  options: { isIgst: boolean; enableRoundOff?: boolean }
+  options: { isIgst: boolean; enableRoundOff?: boolean } & TaxMode
 ): DocumentTotals<T & ComputedTaxLine> => {
-  const { isIgst, enableRoundOff = true } = options;
+  const { isIgst, enableRoundOff = true, gstEnabled, pricesIncludeTax } = options;
 
   const computed = lines.map((line) => ({
     ...line,
-    ...computeLine(line, isIgst)
+    ...computeLine(line, isIgst, { gstEnabled, pricesIncludeTax })
   }));
 
   // Totals sum the rounded line values, never the raw products.

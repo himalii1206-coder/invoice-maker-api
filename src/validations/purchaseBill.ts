@@ -6,8 +6,9 @@ const optionalText = (max: number, label: string) =>
     .trim()
     .max(max, `${label} must be at most ${max} characters`)
     .optional()
+    .nullable()
     .or(z.literal(''))
-    .transform((v) => (v === '' ? undefined : v));
+    .transform((v) => (v === '' || v === null || v === undefined ? undefined : v));
 
 const dateSchema = z
   .union([z.string(), z.date(), z.null(), z.undefined()])

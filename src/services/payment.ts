@@ -1,11 +1,12 @@
-import { Prisma, PaymentMethod, InvoiceStatus, ActivityType } from '@prisma/client';
+import { Prisma, PaymentMethod, InvoiceStatus, ActivityType, NotificationEvent } from '@prisma/client';
 import { prisma } from '../config/database.js';
 import { AppError } from '../utils/error.js';
 import { PaginationMeta } from '../types/index.js';
-import { round2, toNumber } from '../utils/money.js';
+import { round2, toNumber, formatMoney } from '../utils/money.js';
 import { startOfDay, endOfDay, today } from '../utils/date.js';
 import { InvoiceService } from './invoice.js';
 import { ActivityService } from './activity.js';
+import { NotificationService } from './notification.js';
 
 /**
  * Payments against invoices.
@@ -227,6 +228,17 @@ export class PaymentService {
         referenceNumber: input.referenceNumber ?? null
       },
       ipAddress: context.ipAddress
+    });
+
+    await NotificationService.notify({
+      companyId,
+      event: NotificationEvent.PAYMENT_RECEIVED,
+      title: `Payment received: ${formatMoney(amount)}`,
+      body: `Against invoice ${invoice.invoiceNumber} via ${
+        input.paymentMethod ?? PaymentMethod.BANK_TRANSFER
+      }`,
+      link: `/invoices/${invoiceId}`,
+      actorUserId: context.userId
     });
 
     // Settling the invoice makes any pending chase-ups pointless.

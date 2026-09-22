@@ -21,6 +21,22 @@ const PAGE = { width: 595.28, height: 841.89 };
 const MARGIN = { top: 40, bottom: 50, left: 40, right: 40 };
 const CONTENT_WIDTH = PAGE.width - MARGIN.left - MARGIN.right;
 
+/**
+ * Per-document font aliases.
+ *
+ * Every draw call asks for these names rather than a concrete family, and
+ * `registerFonts` points them at the family chosen in settings. Registration is
+ * on the document, so two invoices rendering at once cannot affect each other.
+ */
+const FONT = { regular: 'Body', bold: 'BodyBold' } as const;
+
+/** The families PDFKit can render without a font file being shipped. */
+const FONT_FAMILIES: Record<string, { regular: string; bold: string }> = {
+  HELVETICA: { regular: 'Helvetica', bold: 'Helvetica-Bold' },
+  TIMES: { regular: 'Times-Roman', bold: 'Times-Bold' },
+  COURIER: { regular: 'Courier', bold: 'Courier-Bold' }
+};
+
 const INK = {
   text: '#2b180d',
   muted: '#6b5a4e',
@@ -102,10 +118,12 @@ export class PdfService {
       try {
         const accent = this.safeColor(settings.themeColor, '#7c4a27');
 
+        this.registerFonts(doc, settings.fontFamily);
+
         this.drawHeader(doc, invoice, company, accent);
         this.drawPartyBlock(doc, invoice, company, accent);
         const columns = this.buildColumns(settings);
-        this.drawItemsTable(doc, invoice, columns, accent);
+        this.drawItemsTable(doc, invoice, columns, accent, settings);
         this.drawTaxSummary(doc, invoice, accent);
         this.drawTotals(doc, invoice, accent);
         this.drawFooter(doc, invoice, company, settings, accent);
@@ -119,6 +137,14 @@ export class PdfService {
         reject(error);
       }
     });
+  }
+
+  /** Points the document's font aliases at the family chosen in settings. */
+  private static registerFonts(doc: PDFKit.PDFDocument, fontFamily: string | null): void {
+    const family = FONT_FAMILIES[(fontFamily ?? '').toUpperCase()] ?? FONT_FAMILIES.HELVETICA;
+
+    doc.registerFont(FONT.regular, family.regular);
+    doc.registerFont(FONT.bold, family.bold);
   }
 
   // -------------------------------------------------------------------------
@@ -135,7 +161,7 @@ export class PdfService {
 
     doc
       .fillColor(accent)
-      .font('Helvetica-Bold')
+      .font(FONT.bold)
       .fontSize(18)
       .text(company.name, MARGIN.left, top, { width: CONTENT_WIDTH * 0.58 });
 
@@ -147,7 +173,7 @@ export class PdfService {
       company.email
     ].filter(Boolean) as string[];
 
-    doc.font('Helvetica').fontSize(8.5).fillColor(INK.muted);
+    doc.font(FONT.regular).fontSize(8.5).fillColor(INK.muted);
     let y = doc.y + 2;
 
     for (const line of addressLines) {
@@ -161,7 +187,7 @@ export class PdfService {
     ].filter(Boolean) as string[];
 
     if (taxLines.length) {
-      doc.font('Helvetica-Bold').fillColor(INK.text).fontSize(8.5);
+      doc.font(FONT.bold).fillColor(INK.text).fontSize(8.5);
       doc.text(taxLines.join('   |   '), MARGIN.left, y + 2, { width: CONTENT_WIDTH * 0.58 });
       y = doc.y;
     }
@@ -173,7 +199,7 @@ export class PdfService {
     const documentTitle = (invoice.billType || 'TAX_INVOICE').replace(/_/g, ' ').toUpperCase();
 
     doc
-      .font('Helvetica-Bold')
+      .font(FONT.bold)
       .fontSize(18)
       .fillColor(INK.text)
       .text(documentTitle, boxX, top, { width: boxWidth, align: 'right' });
@@ -223,10 +249,10 @@ export class PdfService {
     let metaY = top + 26;
 
     for (const [label, value] of meta) {
-      doc.font('Helvetica').fontSize(8).fillColor(INK.subtle);
+      doc.font(FONT.regular).fontSize(8).fillColor(INK.subtle);
       doc.text(`${label}`, boxX, metaY, { width: boxWidth * 0.42, align: 'left' });
 
-      doc.font('Helvetica-Bold').fontSize(8).fillColor(INK.text);
+      doc.font(FONT.bold).fontSize(8).fillColor(INK.text);
       doc.text(value, boxX + boxWidth * 0.42, metaY, {
         width: boxWidth * 0.58,
         align: 'right'
@@ -296,7 +322,7 @@ export class PdfService {
       doc.rect(x, top, colWidth, 16).fillColor(INK.band).fill();
 
       doc
-        .font('Helvetica-Bold')
+        .font(FONT.bold)
         .fontSize(7.5)
         .fillColor(accent)
         .text(title.toUpperCase(), x + 8, top + 5, { width: colWidth - 16 });
@@ -304,12 +330,12 @@ export class PdfService {
       let lineY = top + 21;
 
       if (heading) {
-        doc.font('Helvetica-Bold').fontSize(9.5).fillColor(INK.text);
+        doc.font(FONT.bold).fontSize(9.5).fillColor(INK.text);
         doc.text(heading, x + 8, lineY, { width: colWidth - 16 });
         lineY = doc.y + 1;
       }
 
-      doc.font('Helvetica').fontSize(8).fillColor(INK.muted);
+      doc.font(FONT.regular).fontSize(8).fillColor(INK.muted);
       for (const line of lines) {
         doc.text(line, x + 8, lineY, { width: colWidth - 16 });
         lineY = doc.y;
@@ -360,13 +386,19 @@ export class PdfService {
     doc: PDFKit.PDFDocument,
     invoice: InvoiceDetail,
     columns: Column[],
-    accent: string
+    accent: string,
+    settings: InvoiceSettingsRecord
   ): void {
+    // "grid" rules every cell, "striped" shades alternate rows, "minimal"
+    // leaves only the divider between rows.
+    const tableStyle = ['grid', 'minimal', 'striped'].includes(settings.tableStyle)
+      ? settings.tableStyle
+      : 'grid';
     const drawHead = (y: number): number => {
       doc.rect(MARGIN.left, y, CONTENT_WIDTH, 20).fillColor(accent).fill();
 
       let x = MARGIN.left;
-      doc.font('Helvetica-Bold').fontSize(7.5).fillColor('#ffffff');
+      doc.font(FONT.bold).fontSize(7.5).fillColor('#ffffff');
 
       for (const column of columns) {
         doc.text(column.label.toUpperCase(), x + 5, y + 6.5, {
@@ -381,7 +413,7 @@ export class PdfService {
 
     let y = drawHead(doc.y);
 
-    doc.font('Helvetica').fontSize(8);
+    doc.font(FONT.regular).fontSize(8);
 
     invoice.items.forEach((item, index) => {
       const cells: Record<string, string> = {
@@ -412,11 +444,28 @@ export class PdfService {
       if (y + rowHeight > PAGE.height - MARGIN.bottom - 30) {
         doc.addPage();
         y = drawHead(MARGIN.top);
-        doc.font('Helvetica').fontSize(8);
+        doc.font(FONT.regular).fontSize(8);
       }
 
-      if (index % 2 === 1) {
+      if (tableStyle === 'striped' && index % 2 === 1) {
         doc.rect(MARGIN.left, y, CONTENT_WIDTH, rowHeight).fillColor(INK.zebra).fill();
+      }
+
+      if (tableStyle === 'grid') {
+        // Vertical rules between the columns, which is what makes each GST
+        // figure unambiguous on a printed copy.
+        let ruleX = MARGIN.left;
+        for (const column of columns) {
+          ruleX += column.width;
+          if (ruleX < PAGE.width - MARGIN.right) {
+            doc
+              .moveTo(ruleX, y)
+              .lineTo(ruleX, y + rowHeight)
+              .lineWidth(0.3)
+              .strokeColor(INK.border)
+              .stroke();
+          }
+        }
       }
 
       let x = MARGIN.left;
@@ -425,24 +474,24 @@ export class PdfService {
         const value = cells[column.key] ?? '';
 
         if (column.key === 'name') {
-          doc.font('Helvetica-Bold').fontSize(8).fillColor(INK.text);
+          doc.font(FONT.bold).fontSize(8).fillColor(INK.text);
           doc.text(value, x + 5, y + 5, { width: column.width - 10 });
 
           if (item.description) {
-            doc.font('Helvetica').fontSize(7).fillColor(INK.subtle);
+            doc.font(FONT.regular).fontSize(7).fillColor(INK.subtle);
             doc.text(item.description, x + 5, doc.y, { width: column.width - 10 });
           }
         } else if (column.key === 'tax') {
-          doc.font('Helvetica').fontSize(8).fillColor(INK.text);
+          doc.font(FONT.regular).fontSize(8).fillColor(INK.text);
           doc.text(value, x + 5, y + 5, { width: column.width - 10, align: column.align });
 
-          doc.font('Helvetica').fontSize(6.5).fillColor(INK.subtle);
+          doc.font(FONT.regular).fontSize(6.5).fillColor(INK.subtle);
           doc.text(`@ ${toNumber(item.taxRate)}%`, x + 5, y + 14, {
             width: column.width - 10,
             align: column.align
           });
         } else {
-          doc.font('Helvetica').fontSize(8).fillColor(INK.text);
+          doc.font(FONT.regular).fontSize(8).fillColor(INK.text);
           doc.text(value, x + 5, y + 5, { width: column.width - 10, align: column.align });
         }
 
@@ -512,7 +561,7 @@ export class PdfService {
     const top = doc.y;
 
     doc
-      .font('Helvetica-Bold')
+      .font(FONT.bold)
       .fontSize(7.5)
       .fillColor(accent)
       .text('GST BREAKDOWN', MARGIN.left, top);
@@ -522,7 +571,7 @@ export class PdfService {
     doc.rect(MARGIN.left, y, tableWidth, 15).fillColor(INK.band).fill();
 
     let x = MARGIN.left;
-    doc.font('Helvetica-Bold').fontSize(7).fillColor(INK.text);
+    doc.font(FONT.bold).fontSize(7).fillColor(INK.text);
 
     for (const column of columns) {
       doc.text(column.label.toUpperCase(), x + 4, y + 4.5, {
@@ -551,7 +600,7 @@ export class PdfService {
           ];
 
       x = MARGIN.left;
-      doc.font('Helvetica').fontSize(7.5).fillColor(INK.muted);
+      doc.font(FONT.regular).fontSize(7.5).fillColor(INK.muted);
 
       values.forEach((value, index) => {
         const column = columns[index];
@@ -609,10 +658,10 @@ export class PdfService {
     doc.fontSize(8.5);
 
     for (const [label, value] of rows) {
-      doc.font('Helvetica').fillColor(INK.muted);
+      doc.font(FONT.regular).fillColor(INK.muted);
       doc.text(label, x, y, { width: boxWidth * 0.5 });
 
-      doc.font('Helvetica').fillColor(INK.text);
+      doc.font(FONT.regular).fillColor(INK.text);
       doc.text(value, x + boxWidth * 0.5, y, { width: boxWidth * 0.5, align: 'right' });
 
       y += 13;
@@ -620,7 +669,7 @@ export class PdfService {
 
     // Grand total band.
     doc.rect(x, y + 2, boxWidth, 22).fillColor(accent).fill();
-    doc.font('Helvetica-Bold').fontSize(9.5).fillColor('#ffffff');
+    doc.font(FONT.bold).fontSize(9.5).fillColor('#ffffff');
     doc.text('Grand Total', x + 8, y + 8.5, { width: boxWidth * 0.5 });
     doc.text(formatMoney(invoice.grandTotal, invoice.currency), x + boxWidth * 0.5 - 8, y + 8.5, {
       width: boxWidth * 0.5,
@@ -661,10 +710,10 @@ export class PdfService {
 
     for (const [label, value, color] of settled) {
       const isBalance = label === 'Balance Due';
-      doc.font(isBalance ? 'Helvetica-Bold' : 'Helvetica').fontSize(8.5).fillColor(INK.muted);
+      doc.font(isBalance ? FONT.bold : FONT.regular).fontSize(8.5).fillColor(INK.muted);
       doc.text(label, x, y, { width: boxWidth * 0.5 });
 
-      doc.font('Helvetica-Bold').fillColor(color);
+      doc.font(FONT.bold).fillColor(color);
       doc.text(value, x + boxWidth * 0.5, y, { width: boxWidth * 0.5, align: 'right' });
 
       y += 13;
@@ -677,13 +726,13 @@ export class PdfService {
 
     // Amount in words spans the full width, under both columns.
     doc
-      .font('Helvetica')
+      .font(FONT.regular)
       .fontSize(7.5)
       .fillColor(INK.subtle)
       .text('Amount in Words', MARGIN.left, doc.y);
 
     doc
-      .font('Helvetica-Bold')
+      .font(FONT.bold)
       .fontSize(8.5)
       .fillColor(INK.text)
       .text(amountInWords(invoice.grandTotal, invoice.currency), MARGIN.left, doc.y + 1, {
@@ -700,19 +749,36 @@ export class PdfService {
     settings: InvoiceSettingsRecord,
     accent: string
   ): void {
-    const bankLines =
-      settings.showBankDetails && (company.bankName || company.accountNumber)
-        ? ([
-            company.bankName ? `Bank: ${company.bankName}` : null,
-            company.accountNumber ? `A/c No: ${company.accountNumber}` : null,
-            company.ifscCode ? `IFSC: ${company.ifscCode}` : null,
-            company.branch ? `Branch: ${company.branch}` : null
-          ].filter(Boolean) as string[])
-        : [];
+    // The whole payment block is one setting: a business that does not want
+    // its account number on the document gets none of it, UPI included.
+    const bankLines = settings.showBankDetails
+      ? ([
+          company.bankName ? `Bank: ${company.bankName}` : null,
+          company.accountHolder ? `A/c Name: ${company.accountHolder}` : null,
+          company.accountNumber ? `A/c No: ${company.accountNumber}` : null,
+          company.ifscCode ? `IFSC: ${company.ifscCode}` : null,
+          company.branch ? `Branch: ${company.branch}` : null,
+          company.upiId ? `UPI: ${company.upiId}` : null
+        ].filter(Boolean) as string[])
+      : [];
+
+    const acceptedMethods =
+      settings.showBankDetails && company.acceptedPaymentMethods.length
+        ? company.acceptedPaymentMethods
+            .map((method) => method.replace(/_/g, ' ').toLowerCase())
+            .join(', ')
+        : null;
 
     const blocks: Array<{ title: string; body: string[] }> = [];
 
-    if (bankLines.length) blocks.push({ title: 'Bank Details', body: bankLines });
+    if (bankLines.length) blocks.push({ title: 'Payment Details', body: bankLines });
+
+    const paymentNotes = [
+      acceptedMethods ? `We accept: ${acceptedMethods}.` : null,
+      settings.showBankDetails ? company.paymentInstructions : null
+    ].filter(Boolean) as string[];
+
+    if (paymentNotes.length) blocks.push({ title: 'How To Pay', body: paymentNotes });
     if (invoice.notes) blocks.push({ title: 'Notes', body: [invoice.notes] });
     if (invoice.terms) blocks.push({ title: 'Terms & Conditions', body: [invoice.terms] });
 
@@ -737,12 +803,12 @@ export class PdfService {
 
     for (const block of blocks) {
       doc
-        .font('Helvetica-Bold')
+        .font(FONT.bold)
         .fontSize(7.5)
         .fillColor(accent)
         .text(block.title.toUpperCase(), MARGIN.left, doc.y, { width: columnWidth });
 
-      doc.font('Helvetica').fontSize(7.5).fillColor(INK.muted);
+      doc.font(FONT.regular).fontSize(7.5).fillColor(INK.muted);
       for (const line of block.body) {
         doc.text(line, MARGIN.left, doc.y + 1, { width: columnWidth });
       }
@@ -752,13 +818,18 @@ export class PdfService {
 
     if (settings.showSignature) {
       const signWidth = CONTENT_WIDTH * 0.32;
-      const signX = PAGE.width - MARGIN.right - signWidth;
+      const onLeft = settings.signaturePosition === 'left';
+
+      // The text aligns to the same edge the block sits on, so a left-hand
+      // signature does not end up floating away from its own rule.
+      const signX = onLeft ? MARGIN.left : PAGE.width - MARGIN.right - signWidth;
+      const align: 'left' | 'right' = onLeft ? 'left' : 'right';
 
       doc
-        .font('Helvetica')
+        .font(FONT.regular)
         .fontSize(7.5)
         .fillColor(INK.muted)
-        .text(`For ${company.name}`, signX, blockTop, { width: signWidth, align: 'right' });
+        .text(`For ${company.name}`, signX, blockTop, { width: signWidth, align });
 
       const lineY = blockTop + 46;
 
@@ -770,17 +841,17 @@ export class PdfService {
         .stroke();
 
       doc
-        .font('Helvetica-Bold')
+        .font(FONT.bold)
         .fontSize(7.5)
         .fillColor(INK.text)
-        .text('Authorised Signatory', signX, lineY + 4, { width: signWidth, align: 'right' });
+        .text('Authorised Signatory', signX, lineY + 4, { width: signWidth, align });
 
       doc.y = Math.max(doc.y, lineY + 16);
     }
 
     if (settings.footerNote) {
       doc
-        .font('Helvetica')
+        .font(FONT.regular)
         .fontSize(7)
         .fillColor(INK.subtle)
         .text(settings.footerNote, MARGIN.left, doc.y + 6, {
@@ -810,7 +881,7 @@ export class PdfService {
         doc.save();
         doc.rotate(-38, { origin: [PAGE.width / 2, PAGE.height / 2] });
         doc
-          .font('Helvetica-Bold')
+          .font(FONT.bold)
           .fontSize(78)
           .fillColor(options.watermark === 'CANCELLED' ? INK.danger : INK.subtle)
           .opacity(0.1)
@@ -824,7 +895,7 @@ export class PdfService {
       const footerY = PAGE.height - MARGIN.bottom + 16;
 
       doc
-        .font('Helvetica')
+        .font(FONT.regular)
         .fontSize(6.5)
         .fillColor(INK.subtle)
         .text(
@@ -843,7 +914,7 @@ export class PdfService {
 
       if (options.copyLabel) {
         doc
-          .font('Helvetica-Bold')
+          .font(FONT.bold)
           .fontSize(6.5)
           .fillColor(INK.subtle)
           .text(options.copyLabel.toUpperCase(), MARGIN.left, footerY - 10, {

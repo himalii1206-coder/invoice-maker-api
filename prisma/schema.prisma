@@ -13,22 +13,38 @@ datasource db {
 // ---------------------------------------------------------------------------
 
 model User {
-  id                       String            @id @default(uuid())
-  email                    String            @unique
+  id                       String    @id @default(uuid())
+  email                    String    @unique
   passwordHash             String
   firstName                String
   lastName                 String
-  role                     UserRole          @default(OWNER)
-  isActive                 Boolean           @default(true)
-  isEmailVerified          Boolean           @default(false)
-  emailVerificationToken   String?           @unique
+  role                     UserRole  @default(OWNER)
+  isActive                 Boolean   @default(true)
+  isEmailVerified          Boolean   @default(false)
+  emailVerificationToken   String?   @unique
   emailVerificationCode    String?
   emailVerificationExpires DateTime?
-  createdAt                DateTime          @default(now())
-  updatedAt                DateTime          @updatedAt
-  company                  Company?
-  sessions                 Session[]
-  activities               InvoiceActivity[]
+
+  /// Two-factor authentication (TOTP). `twoFactorPendingSecret` holds a secret
+  /// that has been shown to the user but not yet proven with a valid code, so a
+  /// half-finished enrolment can never lock anyone out.
+  twoFactorEnabled       Boolean   @default(false)
+  twoFactorSecret        String?
+  twoFactorPendingSecret String?
+  twoFactorConfirmedAt   DateTime?
+  /// One-time recovery codes, stored hashed.
+  twoFactorRecoveryCodes String[]  @default([])
+
+  passwordChangedAt DateTime?
+
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  company       Company?
+  sessions      Session[]
+  activities    InvoiceActivity[]
+  memberships   CompanyMember[]   @relation("MemberUser")
+  invitesSent   CompanyMember[]   @relation("MemberInvitedBy")
+  notifications Notification[]
 
   @@map("users")
 }
@@ -41,6 +57,7 @@ model Session {
   ipAddress        String?
   userAgent        String?
   expiresAt        DateTime
+  lastUsedAt       DateTime @default(now())
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
   user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -50,42 +67,50 @@ model Session {
 }
 
 model Company {
-  id                String             @id @default(uuid())
-  userId            String             @unique
-  name              String
-  email             String?
-  phone             String?
-  address           String?
-  city              String?
-  state             String?
-  country           String             @default("India")
-  postalCode        String?
-  gstin             String?
-  pan               String?
-  logoUrl           String?
-  invoicePrefix     String             @default("INV-")
-  nextInvoiceNumber Int                @default(1001)
-  defaultTaxRate    Decimal            @default(18.00) @db.Decimal(5, 2)
-  bankName          String?
-  accountNumber     String?
-  ifscCode          String?
-  branch            String?
-  createdAt         DateTime           @default(now())
-  updatedAt         DateTime           @updatedAt
-  user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
-  customers         Customer[]
-  invoices          Invoice[]
-  payments          Payment[]
-  products          Product[]
-  invoiceSettings   InvoiceSettings?
-  sequences         DocumentSequence[]
-  notes             CreditDebitNote[]
-  recurring         RecurringInvoice[]
-  reminders         PaymentReminder[]
-  activities        InvoiceActivity[]
-  vendors           Vendor[]
-  purchaseBills     PurchaseBill[]
-  purchasePayments  PurchasePayment[]
+  id                     String             @id @default(uuid())
+  userId                 String             @unique
+  name                   String
+  email                  String?
+  phone                  String?
+  address                String?
+  city                   String?
+  state                  String?
+  country                String             @default("India")
+  postalCode             String?
+  gstin                  String?
+  pan                    String?
+  logoUrl                String?
+  invoicePrefix          String             @default("INV-")
+  nextInvoiceNumber      Int                @default(1001)
+  defaultTaxRate         Decimal            @default(18.00) @db.Decimal(5, 2)
+  bankName               String?
+  accountNumber          String?
+  ifscCode               String?
+  branch                 String?
+  accountHolder          String?
+  upiId                  String?
+  paymentInstructions    String?
+  /// Which payment rails the business accepts; printed on the invoice PDF and
+  /// used to limit the methods offered when recording a payment.
+  acceptedPaymentMethods PaymentMethod[]    @default([BANK_TRANSFER, UPI, CASH, CHEQUE])
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
+  user                   User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  customers              Customer[]
+  invoices               Invoice[]
+  payments               Payment[]
+  products               Product[]
+  invoiceSettings        InvoiceSettings?
+  sequences              DocumentSequence[]
+  notes                  CreditDebitNote[]
+  recurring              RecurringInvoice[]
+  reminders              PaymentReminder[]
+  activities             InvoiceActivity[]
+  vendors                Vendor[]
+  purchaseBills          PurchaseBill[]
+  purchasePayments       PurchasePayment[]
+  members                CompanyMember[]
+  notifications          Notification[]
 
   @@map("companies")
 }
@@ -93,6 +118,8 @@ model Company {
 model Customer {
   id                 String             @id @default(uuid())
   companyId          String
+  /// Human-readable account code (e.g. CUST-0001), generated from settings.
+  customerCode       String?
   name               String
   email              String?
   phone              String?
@@ -125,6 +152,7 @@ model Customer {
   notes              CreditDebitNote[]
   recurring          RecurringInvoice[]
 
+  @@unique([companyId, customerCode])
   @@index([companyId])
   @@map("customers")
 }
@@ -148,6 +176,7 @@ model Product {
   company     Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   customer    Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
 
+  @@unique([companyId, productCode])
   @@index([companyId])
   @@index([customerId])
   @@index([companyId, category])
@@ -526,14 +555,46 @@ model InvoiceSettings {
   defaultNotes    String?
 
   // Document presentation
-  themeColor      String  @default("#7c4a27")
-  template        String  @default("classic")
-  showHsnColumn   Boolean @default(true)
-  showDiscount    Boolean @default(true)
-  showBankDetails Boolean @default(true)
-  showSignature   Boolean @default(true)
-  signatureUrl    String?
-  footerNote      String?
+  themeColor        String  @default("#7c4a27")
+  template          String  @default("classic")
+  /// Maps to a PDF core font family: HELVETICA, TIMES or COURIER.
+  fontFamily        String  @default("HELVETICA")
+  /// grid | minimal | striped - how item rows are ruled on the document.
+  tableStyle        String  @default("grid")
+  /// Which side the authorised-signatory block sits on.
+  signaturePosition String  @default("right")
+  showHsnColumn     Boolean @default(true)
+  showDiscount      Boolean @default(true)
+  showBankDetails   Boolean @default(true)
+  showSignature     Boolean @default(true)
+  signatureUrl      String?
+  footerNote        String?
+
+  // Tax regime
+  gstEnabled           Boolean @default(true)
+  /// When true, entered unit prices are treated as tax-inclusive and the tax is
+  /// backed out of them instead of added on top.
+  pricesIncludeTax     Boolean @default(false)
+  enableReverseCharge  Boolean @default(true)
+  hsnRequiredOnProduct Boolean @default(true)
+
+  // Customer directory defaults
+  customerCodePrefix   String  @default("CUST")
+  customerCreditDays   Int     @default(15)
+  customerRequirePhone Boolean @default(true)
+  customerRequireState Boolean @default(true)
+  customerRequireGstin Boolean @default(false)
+
+  // Product catalogue defaults
+  productCodePrefix   String @default("PRD")
+  defaultUnit         String @default("PCS")
+  defaultDiscountMode String @default("PERCENT")
+
+  // Notifications
+  notifyEvents  NotificationEvent[] @default([INVOICE_CREATED, INVOICE_PAID, INVOICE_OVERDUE, PAYMENT_RECEIVED, NOTE_ISSUED])
+  notifyEmail   Boolean             @default(true)
+  notifyInApp   Boolean             @default(true)
+  notifyBrowser Boolean             @default(false)
 
   // Behaviour
   enableRoundOff  Boolean @default(true)
@@ -573,13 +634,81 @@ model DocumentSequence {
 }
 
 // ---------------------------------------------------------------------------
+// Team & notifications
+// ---------------------------------------------------------------------------
+
+/// A person's access to a business.
+///
+/// The row is created when the invite is sent, before the invitee has an
+/// account, so `userId` stays null until they accept. `email` is therefore the
+/// stable identity of a membership, not `userId`.
+model CompanyMember {
+  id        String       @id @default(uuid())
+  companyId String
+  userId    String?
+  email     String
+  role      UserRole     @default(STAFF)
+  status    MemberStatus @default(INVITED)
+
+  /// Invite tokens are stored hashed; the plaintext only ever exists in the
+  /// invitation email.
+  inviteTokenHash String?   @unique
+  inviteExpiresAt DateTime?
+  invitedById     String?
+  invitedAt       DateTime  @default(now())
+  acceptedAt      DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user      User?   @relation("MemberUser", fields: [userId], references: [id], onDelete: Cascade)
+  invitedBy User?   @relation("MemberInvitedBy", fields: [invitedById], references: [id], onDelete: SetNull)
+
+  @@unique([companyId, email])
+  @@index([companyId])
+  @@index([userId])
+  @@map("company_members")
+}
+
+/// In-app notification. One row per recipient so read state is per person.
+model Notification {
+  id        String            @id @default(uuid())
+  companyId String
+  userId    String
+  event     NotificationEvent
+  title     String
+  body      String?
+  /// Deep link into the app, e.g. /invoices/<id>.
+  link      String?
+  isRead    Boolean           @default(false)
+  readAt    DateTime?
+  createdAt DateTime          @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead])
+  @@index([companyId, createdAt])
+  @@map("notifications")
+}
+
+// ---------------------------------------------------------------------------
 // Enums
 // ---------------------------------------------------------------------------
 
 enum UserRole {
   OWNER
   ADMIN
+  ACCOUNTANT
+  STAFF
   MEMBER
+}
+
+enum MemberStatus {
+  INVITED
+  ACTIVE
+  SUSPENDED
 }
 
 enum CustomerType {
@@ -675,6 +804,18 @@ enum DocumentType {
   CREDIT_NOTE
   DEBIT_NOTE
   PURCHASE_BILL
+  CUSTOMER
+  PRODUCT
+}
+
+/// Business events a user can subscribe to in notification settings.
+enum NotificationEvent {
+  INVOICE_CREATED
+  INVOICE_PAID
+  INVOICE_OVERDUE
+  PAYMENT_RECEIVED
+  CUSTOMER_ADDED
+  NOTE_ISSUED
 }
 
 enum PurchaseBillStatus {
@@ -706,35 +847,35 @@ enum ItemCategory {
 // ---------------------------------------------------------------------------
 
 model Vendor {
-  id                 String             @id @default(uuid())
+  id                 String            @id @default(uuid())
   companyId          String
   name               String
   tradeName          String?
   contactPerson      String?
   email              String?
   phone              String?
-  type               CustomerType       @default(BUSINESS)
+  type               CustomerType      @default(BUSINESS)
   gstin              String?
   pan                String?
   address            String?
   city               String?
   state              String?
-  country            String             @default("India")
+  country            String            @default("India")
   postalCode         String?
   bankName           String?
   accountNumber      String?
   ifscCode           String?
   branch             String?
-  openingBalance     Decimal?           @default(0.00) @db.Decimal(14, 2)
+  openingBalance     Decimal?          @default(0.00) @db.Decimal(14, 2)
   openingBalanceDate DateTime?
-  balanceType        String?            @default("CR")
+  balanceType        String?           @default("CR")
   paymentTerms       String?
   partyCategory      String?
   narration          String?
-  isActive           Boolean            @default(true)
-  createdAt          DateTime           @default(now())
-  updatedAt          DateTime           @updatedAt
-  company            Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  isActive           Boolean           @default(true)
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+  company            Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
   purchaseBills      PurchaseBill[]
   payments           PurchasePayment[]
 
@@ -877,4 +1018,3 @@ model PurchasePayment {
   @@index([companyId, paymentDate])
   @@map("purchase_payments")
 }
-

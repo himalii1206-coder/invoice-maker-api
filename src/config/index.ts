@@ -13,6 +13,9 @@ const envSchema = z.object({
   JWT_REFRESH_EXPIRES_IN: z.string().default('7d'),
   CORS_ORIGIN: z.string().default('http://localhost:3000'),
   APP_URL: z.string().default('http://localhost:3000'),
+  TWO_FACTOR_ISSUER: z.string().default('Invoice Maker'),
+  RATE_LIMIT_WINDOW_MINUTES: z.coerce.number().default(15),
+  RATE_LIMIT_MAX_REQUESTS: z.coerce.number().default(100),
   SMTP_HOST: z.string().optional(),
   SMTP_PORT: z.coerce.number().default(587),
   SMTP_USER: z.string().optional(),
@@ -40,6 +43,12 @@ export const config = {
   },
   corsOrigin: parsedEnv.data.CORS_ORIGIN,
   appUrl: parsedEnv.data.APP_URL,
+  /** Shown as the account label inside authenticator apps. */
+  twoFactorIssuer: parsedEnv.data.TWO_FACTOR_ISSUER,
+  rateLimit: {
+    windowMs: parsedEnv.data.RATE_LIMIT_WINDOW_MINUTES * 60 * 1000,
+    max: parsedEnv.data.RATE_LIMIT_MAX_REQUESTS
+  },
   smtp: {
     host: parsedEnv.data.SMTP_HOST,
     port: parsedEnv.data.SMTP_PORT,

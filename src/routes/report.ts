@@ -45,6 +45,19 @@ type ScopeQuery = ReportScope & { limit: number };
 const scopeOf = (req: AuthRequest): ScopeQuery => req.validated?.query as ScopeQuery;
 
 router.get(
+  '/comprehensive-analytics',
+  validate(reportScopeSchema),
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const data = await ReportService.comprehensiveAnalytics(companyIdOf(req), scopeOf(req));
+      sendResponse(res, 200, 'Comprehensive business analytics generated', data);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.get(
   '/monthly-sales',
   validate(reportScopeSchema),
   async (req: AuthRequest, res: Response, next: NextFunction) => {

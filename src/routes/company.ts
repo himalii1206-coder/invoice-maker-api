@@ -2,6 +2,7 @@ import { Router, Response, NextFunction } from 'express';
 import { prisma } from '../config/database.js';
 import { authenticate } from '../middleware/auth.js';
 import { resolveCompany } from '../middleware/company.js';
+import { requirePermission } from '../middleware/permissions.js';
 import { validate } from '../middleware/validate.js';
 import { updateCompanySchema } from '../validations/company.js';
 import { sendResponse } from '../utils/response.js';
@@ -11,6 +12,31 @@ import { AppError } from '../utils/error.js';
 const router = Router();
 
 router.use(authenticate, resolveCompany);
+
+const companySelect = {
+  id: true,
+  name: true,
+  email: true,
+  phone: true,
+  address: true,
+  city: true,
+  state: true,
+  country: true,
+  postalCode: true,
+  gstin: true,
+  pan: true,
+  logoUrl: true,
+  bankName: true,
+  accountNumber: true,
+  ifscCode: true,
+  branch: true,
+  accountHolder: true,
+  upiId: true,
+  paymentInstructions: true,
+  acceptedPaymentMethods: true,
+  createdAt: true,
+  updatedAt: true
+} as const;
 
 const companyIdOf = (req: AuthRequest): string => {
   if (!req.companyId) {
@@ -23,26 +49,7 @@ router.get('/', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const company = await prisma.company.findUnique({
       where: { id: companyIdOf(req) },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        phone: true,
-        address: true,
-        city: true,
-        state: true,
-        country: true,
-        postalCode: true,
-        gstin: true,
-        pan: true,
-        logoUrl: true,
-        bankName: true,
-        accountNumber: true,
-        ifscCode: true,
-        branch: true,
-        createdAt: true,
-        updatedAt: true
-      }
+      select: companySelect
     });
 
     if (!company) {
@@ -57,6 +64,7 @@ router.get('/', async (req: AuthRequest, res: Response, next: NextFunction) => {
 
 router.put(
   '/',
+  requirePermission('company:write'),
   validate(updateCompanySchema),
   async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
@@ -75,47 +83,38 @@ router.put(
         bankName,
         accountNumber,
         ifscCode,
-        branch
+        branch,
+        accountHolder,
+        upiId,
+        paymentInstructions,
+        acceptedPaymentMethods
       } = req.body;
+
+      const dataToUpdate: any = {};
+      if (name !== undefined) dataToUpdate.name = name ? name.trim() : undefined;
+      if (email !== undefined) dataToUpdate.email = email ? email.trim() : null;
+      if (phone !== undefined) dataToUpdate.phone = phone ? phone.trim() : null;
+      if (address !== undefined) dataToUpdate.address = address ? address.trim() : null;
+      if (city !== undefined) dataToUpdate.city = city ? city.trim() : null;
+      if (state !== undefined) dataToUpdate.state = state ? state.trim() : null;
+      if (country !== undefined) dataToUpdate.country = country ? country.trim() : 'India';
+      if (postalCode !== undefined) dataToUpdate.postalCode = postalCode ? postalCode.trim() : null;
+      if (gstin !== undefined) dataToUpdate.gstin = gstin ? gstin.trim().toUpperCase() : null;
+      if (pan !== undefined) dataToUpdate.pan = pan ? pan.trim().toUpperCase() : null;
+      if (bankName !== undefined) dataToUpdate.bankName = bankName ? bankName.trim() : null;
+      if (accountNumber !== undefined) dataToUpdate.accountNumber = accountNumber ? accountNumber.trim() : null;
+      if (ifscCode !== undefined) dataToUpdate.ifscCode = ifscCode ? ifscCode.trim().toUpperCase() : null;
+      if (branch !== undefined) dataToUpdate.branch = branch ? branch.trim() : null;
+      if (accountHolder !== undefined) dataToUpdate.accountHolder = accountHolder ? accountHolder.trim() : null;
+      if (upiId !== undefined) dataToUpdate.upiId = upiId ? upiId.trim() : null;
+      if (paymentInstructions !== undefined)
+        dataToUpdate.paymentInstructions = paymentInstructions ? paymentInstructions.trim() : null;
+      if (acceptedPaymentMethods !== undefined) dataToUpdate.acceptedPaymentMethods = acceptedPaymentMethods;
 
       const updated = await prisma.company.update({
         where: { id: companyId },
-        data: {
-          name: name.trim(),
-          email: email ? email.trim() : null,
-          phone: phone ? phone.trim() : null,
-          address: address ? address.trim() : null,
-          city: city ? city.trim() : null,
-          state: state ? state.trim() : null,
-          country: country ? country.trim() : 'India',
-          postalCode: postalCode ? postalCode.trim() : null,
-          gstin: gstin ? gstin.trim().toUpperCase() : null,
-          pan: pan ? pan.trim().toUpperCase() : null,
-          bankName: bankName ? bankName.trim() : null,
-          accountNumber: accountNumber ? accountNumber.trim() : null,
-          ifscCode: ifscCode ? ifscCode.trim().toUpperCase() : null,
-          branch: branch ? branch.trim() : null
-        },
-        select: {
-          id: true,
-          name: true,
-          email: true,
-          phone: true,
-          address: true,
-          city: true,
-          state: true,
-          country: true,
-          postalCode: true,
-          gstin: true,
-          pan: true,
-          logoUrl: true,
-          bankName: true,
-          accountNumber: true,
-          ifscCode: true,
-          branch: true,
-          createdAt: true,
-          updatedAt: true
-        }
+        data: dataToUpdate,
+        select: companySelect
       });
 
       sendResponse(res, 200, 'Company profile updated successfully', updated);

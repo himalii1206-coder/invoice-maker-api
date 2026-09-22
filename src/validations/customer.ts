@@ -6,15 +6,30 @@ const PINCODE_REGEX = /^[1-9][0-9]{5}$/;
 const PHONE_REGEX = /^(\+91[\-\s]?)?[6-9]\d{9}$|^[0-9]{10}$/;
 const ACCOUNT_NO_REGEX = /^[0-9]{9,18}$/;
 
-/** Turns "" into undefined so optional text fields can be cleared from a form. */
+/** Turns "" or null into undefined so optional text fields can be cleared from a form. */
 const optionalText = (max: number, label: string) =>
   z
     .string()
     .trim()
     .max(max, `${label} must be at most ${max} characters`)
     .optional()
+    .nullable()
     .or(z.literal(''))
-    .transform((v) => (v === '' ? undefined : v));
+    .transform((v) => (v === '' || v === null || v === undefined ? undefined : v));
+
+/**
+ * Whether a phone number, state or GSTIN is *required* is business policy set
+ * in Settings, not a property of the data, so the schema only checks the format
+ * of whatever is supplied. `CustomerService` applies the presence rules, which
+ * keeps one authority for them and lets an existing customer stay valid after a
+ * business tightens the rule.
+ */
+const optionalFormatted = (schema: z.ZodString) =>
+  schema
+    .optional()
+    .nullable()
+    .or(z.literal(''))
+    .transform((v) => (v === '' || v === null ? undefined : v));
 
 const customerFields = {
   name: z
@@ -30,10 +45,12 @@ const customerFields = {
     .optional()
     .or(z.literal(''))
     .transform((v) => (v === '' ? undefined : v?.toLowerCase())),
-  phone: z
-    .string({ required_error: 'Mobile number is required' })
-    .trim()
-    .regex(PHONE_REGEX, 'Invalid mobile number (must be a valid 10-digit number)'),
+  phone: optionalFormatted(
+    z
+      .string()
+      .trim()
+      .regex(PHONE_REGEX, 'Invalid mobile number (must be a valid 10-digit number)')
+  ),
   type: z.enum(['INDIVIDUAL', 'BUSINESS'], {
     errorMap: () => ({ message: 'Type must be either INDIVIDUAL or BUSINESS' })
   }),
@@ -60,11 +77,9 @@ const customerFields = {
     .trim()
     .min(1, 'City is required')
     .max(100, 'City must be at most 100 characters'),
-  state: z
-    .string({ required_error: 'State is required' })
-    .trim()
-    .min(1, 'State is required')
-    .max(100, 'State must be at most 100 characters'),
+  state: optionalFormatted(
+    z.string().trim().min(1, 'State cannot be blank').max(100, 'State must be at most 100 characters')
+  ),
   country: optionalText(100, 'Country'),
   postalCode: z
     .string()
