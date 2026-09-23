@@ -166,7 +166,6 @@ const invoiceListSelect = {
   sentAt: true,
   paidAt: true,
   cancelledAt: true,
-  recurringInvoiceId: true,
   createdAt: true,
   updatedAt: true,
   customerId: true,
@@ -1349,13 +1348,6 @@ export class InvoiceService {
             cancelledReason: reason ?? null,
             balanceDue: 0
           }
-        });
-
-        // Pending reminders for a cancelled invoice would chase money that is no
-        // longer owed.
-        await tx.paymentReminder.updateMany({
-          where: { invoiceId: id, status: 'SCHEDULED' },
-          data: { status: 'CANCELLED' }
         });
       },
       { maxWait: 10000, timeout: 30000 }

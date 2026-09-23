@@ -241,9 +241,6 @@ export class PaymentService {
       actorUserId: context.userId
     });
 
-    // Settling the invoice makes any pending chase-ups pointless.
-    await this.cancelRemindersIfSettled(companyId, invoiceId);
-
     return payment;
   }
 
@@ -325,8 +322,6 @@ export class PaymentService {
       metadata: { paymentId, from: toNumber(existing.amount), to: toNumber(updated.amount) },
       ipAddress: context.ipAddress
     });
-
-    await this.cancelRemindersIfSettled(companyId, existing.invoiceId);
 
     return updated;
   }
@@ -424,22 +419,5 @@ export class PaymentService {
 
     if (!invoice) throw AppError.notFound('Invoice not found');
     return invoice;
-  }
-
-  private static async cancelRemindersIfSettled(
-    companyId: string,
-    invoiceId: string
-  ): Promise<void> {
-    const invoice = await prisma.invoice.findFirst({
-      where: { id: invoiceId, companyId },
-      select: { balanceDue: true }
-    });
-
-    if (invoice && toNumber(invoice.balanceDue) <= 0) {
-      await prisma.paymentReminder.updateMany({
-        where: { invoiceId, status: 'SCHEDULED' },
-        data: { status: 'CANCELLED' }
-      });
-    }
   }
 }

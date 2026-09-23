@@ -59,13 +59,6 @@ export const invoiceSettingsSelect = {
   notifyBrowser: true,
   enableRoundOff: true,
   autoMarkOverdue: true,
-  remindersEnabled: true,
-  remindBeforeDays: true,
-  remindOnDueDate: true,
-  remindAfterDays: true,
-  reminderCcEmails: true,
-  reminderSubject: true,
-  reminderBody: true,
   createdAt: true,
   updatedAt: true
 } satisfies Prisma.InvoiceSettingsSelect;
@@ -118,13 +111,6 @@ export interface UpdateInvoiceSettingsInput {
   notifyBrowser?: boolean;
   enableRoundOff?: boolean;
   autoMarkOverdue?: boolean;
-  remindersEnabled?: boolean;
-  remindBeforeDays?: number[];
-  remindOnDueDate?: boolean;
-  remindAfterDays?: number[];
-  reminderCcEmails?: string | null;
-  reminderSubject?: string | null;
-  reminderBody?: string | null;
 }
 
 /** Trailing punctuation in the legacy prefix is the separator, not the prefix. */
@@ -249,14 +235,7 @@ export class InvoiceSettingsService {
         'notifyInApp',
         'notifyBrowser',
         'enableRoundOff',
-        'autoMarkOverdue',
-        'remindersEnabled',
-        'remindBeforeDays',
-        'remindOnDueDate',
-        'remindAfterDays',
-        'reminderCcEmails',
-        'reminderSubject',
-        'reminderBody'
+        'autoMarkOverdue'
       ] as const
     ).forEach(assign);
 

@@ -172,7 +172,6 @@ export class InvoiceEmailService {
 
     const subject =
       input.subject?.trim() ||
-      settings.reminderSubject?.trim() ||
       (overdueBy > 0
         ? `Overdue: Invoice ${invoice.invoiceNumber} from ${company.name}`
         : `Payment reminder: Invoice ${invoice.invoiceNumber} from ${company.name}`);
@@ -183,7 +182,7 @@ export class InvoiceEmailService {
 
     const result = await sendEmail({
       to: recipient,
-      cc: this.splitEmails(input.cc ?? settings.reminderCcEmails),
+      cc: this.splitEmails(input.cc),
       replyTo: company.email ?? undefined,
       fromName: company.name,
       subject,
@@ -192,7 +191,7 @@ export class InvoiceEmailService {
         company,
         settings.themeColor,
         overdueBy,
-        input.message ?? settings.reminderBody
+        input.message
       ),
       attachments
     });

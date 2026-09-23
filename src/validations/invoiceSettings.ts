@@ -22,12 +22,6 @@ const codePrefix = (label: string) =>
     .toUpperCase()
     .optional();
 
-/** Day offsets for reminders; de-duplicated and capped so a save cannot spam. */
-const dayOffsets = z
-  .array(z.coerce.number().int().min(0, 'Days cannot be negative').max(180, 'Days cannot exceed 180'))
-  .max(6, 'At most 6 reminder offsets can be configured')
-  .transform((values) => Array.from(new Set(values)).sort((a, b) => a - b));
-
 export const updateInvoiceSettingsSchema = z.object({
   body: z
     .object({
@@ -147,15 +141,7 @@ export const updateInvoiceSettingsSchema = z.object({
       notifyBrowser: z.boolean().optional(),
 
       enableRoundOff: z.boolean().optional(),
-      autoMarkOverdue: z.boolean().optional(),
-
-      remindersEnabled: z.boolean().optional(),
-      remindBeforeDays: dayOffsets.optional(),
-      remindOnDueDate: z.boolean().optional(),
-      remindAfterDays: dayOffsets.optional(),
-      reminderCcEmails: optionalText(300, 'Reminder CC emails'),
-      reminderSubject: optionalText(200, 'Reminder subject'),
-      reminderBody: optionalText(2000, 'Reminder body')
+      autoMarkOverdue: z.boolean().optional()
     })
     .refine((data) => Object.keys(data).length > 0, {
       message: 'At least one setting must be provided to update'
