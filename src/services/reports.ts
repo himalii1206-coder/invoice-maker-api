@@ -10,6 +10,7 @@ import {
   MONTH_LABELS
 } from '../utils/date.js';
 import { COUNTED_STATUSES, OPEN_STATUSES } from './invoice.js';
+import { decryptField, decryptObject } from '../utils/encryption.js';
 
 /**
  * Sales and tax reporting.
@@ -236,7 +237,8 @@ export class ReportService {
       select: { id: true, name: true, type: true, gstin: true, state: true, email: true }
     });
 
-    const byId = new Map(customers.map((customer) => [customer.id, customer]));
+    const decryptedCustomers = customers.map((c) => decryptObject(c, ['gstin']));
+    const byId = new Map(decryptedCustomers.map((customer) => [customer.id, customer]));
 
     const series = rows.map((row) => {
       const customer = byId.get(row.customerId);
@@ -588,10 +590,10 @@ export class ReportService {
     const invoiceWhere = buildScope(companyId, scope);
 
     const [
-      company,
-      allInvoices,
+      rawCompany,
+      rawInvoices,
       allPayments,
-      allCustomers,
+      rawCustomers,
       invoiceItems,
       purchaseBills
     ] = await Promise.all([
@@ -688,6 +690,13 @@ export class ReportService {
         }
       })
     ]);
+
+    const company = rawCompany ? decryptObject(rawCompany, ['gstin']) : null;
+    const allCustomers = rawCustomers.map((c) => decryptObject(c, ['gstin']));
+    const allInvoices = rawInvoices.map((inv) => ({
+      ...inv,
+      customer: inv.customer ? decryptObject(inv.customer, ['gstin']) : null
+    }));
 
     const now = startOfDay(new Date()).getTime();
 

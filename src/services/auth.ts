@@ -12,6 +12,8 @@ import { AppError } from '../utils/error.js';
 import { AccountSecurityService } from './accountSecurity.js';
 import { permissionsFor } from '../middleware/permissions.js';
 import { MemberStatus, UserRole } from '@prisma/client';
+import { resolveState } from '../constants/gst.js';
+import { encryptField, decryptObject } from '../utils/encryption.js';
 
 export interface RegisterInput {
   email: string;
@@ -21,6 +23,18 @@ export interface RegisterInput {
   businessName: string;
   phone?: string;
   gstin?: string;
+  pan?: string;
+  address?: string;
+  city?: string;
+  state?: string;
+  postalCode?: string;
+  bankName?: string;
+  accountNumber?: string;
+  ifscCode?: string;
+  branch?: string;
+  upiId?: string;
+  invoicePrefix?: string;
+  nextInvoiceNumber?: number;
 }
 
 export interface LoginInput {
@@ -42,7 +56,20 @@ export class AuthService {
 
     const passwordHash = await hashPassword(input.password);
 
-    // Create User & Company in a single atomic transaction
+    // Auto-extract PAN from GSTIN if not provided
+    let pan = input.pan || null;
+    let state = input.state || null;
+    if (input.gstin && input.gstin.length === 15) {
+      if (!pan) {
+        pan = input.gstin.slice(2, 12);
+      }
+      if (!state) {
+        const resolved = resolveState(input.gstin.slice(0, 2));
+        if (resolved) state = resolved.name;
+      }
+    }
+
+    // Create User & Company in a single atomic transaction with encrypted sensitive fields
     const result = await prisma.$transaction(
       async (tx) => {
         const user = await tx.user.create({
@@ -59,10 +86,21 @@ export class AuthService {
           data: {
             userId: user.id,
             name: input.businessName,
+            email: input.email.toLowerCase(),
             phone: input.phone || null,
-            gstin: input.gstin || null,
-            invoicePrefix: 'INV-',
-            nextInvoiceNumber: 1001
+            gstin: encryptField(input.gstin) || null,
+            pan: encryptField(pan) || null,
+            address: input.address || null,
+            city: input.city || null,
+            state,
+            postalCode: input.postalCode || null,
+            bankName: input.bankName || null,
+            accountNumber: encryptField(input.accountNumber) || null,
+            ifscCode: input.ifscCode || null,
+            branch: input.branch || null,
+            upiId: encryptField(input.upiId) || null,
+            invoicePrefix: input.invoicePrefix || 'INV-',
+            nextInvoiceNumber: input.nextInvoiceNumber || 1001
           }
         });
 
@@ -405,6 +443,7 @@ export class AuthService {
           data: {
             userId: user.id,
             name: businessName,
+            email: user.email.toLowerCase(),
             invoicePrefix: 'INV-',
             nextInvoiceNumber: 1001,
             country: 'India'
@@ -433,6 +472,13 @@ export class AuthService {
           ...user.company,
           invoiceSettings
         }
+      };
+    }
+
+    if (user.company) {
+      user = {
+        ...user,
+        company: decryptObject(user.company, ['gstin', 'pan', 'accountNumber', 'upiId'])
       };
     }
 

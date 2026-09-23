@@ -6,6 +6,7 @@ import { round2, toNumber, toPaise, fromPaise } from '../utils/money.js';
 import { financialYearOf, addDays } from '../utils/date.js';
 import { computeDocument, resolveSupply, TaxLineInput } from './tax.js';
 import { NumberingService } from './numbering.js';
+import { decryptObject } from '../utils/encryption.js';
 
 export interface PurchaseBillItemInput {
   productId?: string | null;
@@ -203,20 +204,30 @@ const purchaseBillSelect = {
   }
 } as const;
 
+const decryptPurchaseBill = <T extends { vendor?: any }>(bill: T): T => {
+  if (!bill) return bill;
+  if (bill.vendor) {
+    bill.vendor = decryptObject(bill.vendor, ['gstin', 'pan', 'accountNumber']);
+  }
+  return bill;
+};
+
 export class PurchaseBillService {
   static async create(companyId: string, input: CreatePurchaseBillInput) {
     if (!input.items || input.items.length === 0) {
       throw AppError.badRequest('A purchase bill must have at least one line item');
     }
 
-    const company = await prisma.company.findUnique({
+    const companyRaw = await prisma.company.findUnique({
       where: { id: companyId },
       select: { state: true, gstin: true, name: true }
     });
 
-    if (!company) {
+    if (!companyRaw) {
       throw AppError.notFound('Company not found');
     }
+
+    const company = decryptObject(companyRaw, ['gstin']);
 
     // Auto-resolve vendor details if vendorId is provided
     let vendorSnapshot = {
@@ -232,10 +243,11 @@ export class PurchaseBillService {
     };
 
     if (input.vendorId) {
-      const vendor = await prisma.vendor.findFirst({
+      const vendorRaw = await prisma.vendor.findFirst({
         where: { id: input.vendorId, companyId }
       });
-      if (vendor) {
+      if (vendorRaw) {
+        const vendor = decryptObject(vendorRaw, ['gstin', 'pan', 'accountNumber']);
         vendorSnapshot = {
           vendorName: vendorSnapshot.vendorName || vendor.name,
           vendorGstin: vendorSnapshot.vendorGstin || vendor.gstin || null,
@@ -402,7 +414,7 @@ export class PurchaseBillService {
       { maxWait: 10000, timeout: 30000 }
     );
 
-    return purchaseBill;
+    return decryptPurchaseBill(purchaseBill);
   }
 
   static async findById(companyId: string, id: string) {
@@ -415,7 +427,7 @@ export class PurchaseBillService {
       throw AppError.notFound('Purchase Bill not found');
     }
 
-    return bill;
+    return decryptPurchaseBill(bill);
   }
 
   static async list(companyId: string, query: ListPurchaseBillsQuery) {
@@ -471,7 +483,7 @@ export class PurchaseBillService {
       hasPrevPage: page > 1
     };
 
-    return { purchaseBills, meta };
+    return { purchaseBills: purchaseBills.map(decryptPurchaseBill), meta };
   }
 
   static async update(companyId: string, id: string, input: UpdatePurchaseBillInput) {
@@ -605,7 +617,7 @@ export class PurchaseBillService {
       { maxWait: 10000, timeout: 30000 }
     );
 
-    return updated;
+    return decryptPurchaseBill(updated);
   }
 
   static async delete(companyId: string, id: string) {

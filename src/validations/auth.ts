@@ -24,7 +24,19 @@ export const registerSchema = z.object({
       .regex(GSTIN_REGEX, 'Invalid GSTIN format (must be 15 alphanumeric characters, e.g. 24AAACC1206D1ZM)')
       .optional()
       .or(z.literal(''))
-      .transform((v) => (v === '' ? undefined : v))
+      .transform((v) => (v === '' ? undefined : v)),
+    pan: z.string().trim().toUpperCase().optional().or(z.literal('')).transform((v) => (v === '' ? undefined : v)),
+    address: z.string().trim().optional().or(z.literal('')).transform((v) => (v === '' ? undefined : v)),
+    city: z.string().trim().optional().or(z.literal('')).transform((v) => (v === '' ? undefined : v)),
+    state: z.string().trim().optional().or(z.literal('')).transform((v) => (v === '' ? undefined : v)),
+    postalCode: z.string().trim().optional().or(z.literal('')).transform((v) => (v === '' ? undefined : v)),
+    bankName: z.string().trim().optional().or(z.literal('')).transform((v) => (v === '' ? undefined : v)),
+    accountNumber: z.string().trim().optional().or(z.literal('')).transform((v) => (v === '' ? undefined : v)),
+    ifscCode: z.string().trim().toUpperCase().optional().or(z.literal('')).transform((v) => (v === '' ? undefined : v)),
+    branch: z.string().trim().optional().or(z.literal('')).transform((v) => (v === '' ? undefined : v)),
+    upiId: z.string().trim().optional().or(z.literal('')).transform((v) => (v === '' ? undefined : v)),
+    invoicePrefix: z.string().trim().max(10).optional().or(z.literal('')).transform((v) => (v === '' ? undefined : v)),
+    nextInvoiceNumber: z.coerce.number().int().positive().optional()
   })
 });
 

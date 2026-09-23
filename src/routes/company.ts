@@ -8,6 +8,7 @@ import { updateCompanySchema } from '../validations/company.js';
 import { sendResponse } from '../utils/response.js';
 import { AuthRequest } from '../types/index.js';
 import { AppError } from '../utils/error.js';
+import { encryptField, decryptObject } from '../utils/encryption.js';
 
 const router = Router();
 
@@ -49,14 +50,23 @@ router.get('/', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const company = await prisma.company.findUnique({
       where: { id: companyIdOf(req) },
-      select: companySelect
+      select: {
+        ...companySelect,
+        user: {
+          select: { email: true }
+        }
+      }
     });
 
     if (!company) {
       throw AppError.notFound('Business profile not found');
     }
 
-    sendResponse(res, 200, 'Company profile retrieved successfully', company);
+    const { user, ...companyData } = company;
+    const effectiveEmail = companyData.email || user?.email || null;
+    const decryptedCompany = decryptObject({ ...companyData, email: effectiveEmail }, ['gstin', 'pan', 'accountNumber', 'upiId']);
+
+    sendResponse(res, 200, 'Company profile retrieved successfully', decryptedCompany);
   } catch (error) {
     next(error);
   }
@@ -99,14 +109,15 @@ router.put(
       if (state !== undefined) dataToUpdate.state = state ? state.trim() : null;
       if (country !== undefined) dataToUpdate.country = country ? country.trim() : 'India';
       if (postalCode !== undefined) dataToUpdate.postalCode = postalCode ? postalCode.trim() : null;
-      if (gstin !== undefined) dataToUpdate.gstin = gstin ? gstin.trim().toUpperCase() : null;
-      if (pan !== undefined) dataToUpdate.pan = pan ? pan.trim().toUpperCase() : null;
+      if (gstin !== undefined) dataToUpdate.gstin = gstin ? encryptField(gstin.trim().toUpperCase()) : null;
+      if (pan !== undefined) dataToUpdate.pan = pan ? encryptField(pan.trim().toUpperCase()) : null;
       if (bankName !== undefined) dataToUpdate.bankName = bankName ? bankName.trim() : null;
-      if (accountNumber !== undefined) dataToUpdate.accountNumber = accountNumber ? accountNumber.trim() : null;
+      if (accountNumber !== undefined)
+        dataToUpdate.accountNumber = accountNumber ? encryptField(accountNumber.trim()) : null;
       if (ifscCode !== undefined) dataToUpdate.ifscCode = ifscCode ? ifscCode.trim().toUpperCase() : null;
       if (branch !== undefined) dataToUpdate.branch = branch ? branch.trim() : null;
       if (accountHolder !== undefined) dataToUpdate.accountHolder = accountHolder ? accountHolder.trim() : null;
-      if (upiId !== undefined) dataToUpdate.upiId = upiId ? upiId.trim() : null;
+      if (upiId !== undefined) dataToUpdate.upiId = upiId ? encryptField(upiId.trim()) : null;
       if (paymentInstructions !== undefined)
         dataToUpdate.paymentInstructions = paymentInstructions ? paymentInstructions.trim() : null;
       if (acceptedPaymentMethods !== undefined) dataToUpdate.acceptedPaymentMethods = acceptedPaymentMethods;
@@ -117,7 +128,9 @@ router.put(
         select: companySelect
       });
 
-      sendResponse(res, 200, 'Company profile updated successfully', updated);
+      const decryptedUpdated = decryptObject(updated, ['gstin', 'pan', 'accountNumber', 'upiId']);
+
+      sendResponse(res, 200, 'Company profile updated successfully', decryptedUpdated);
     } catch (error) {
       next(error);
     }

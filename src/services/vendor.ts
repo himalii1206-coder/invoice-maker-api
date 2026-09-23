@@ -2,6 +2,7 @@ import { Prisma, CustomerType } from '@prisma/client';
 import { prisma } from '../config/database.js';
 import { AppError } from '../utils/error.js';
 import { PaginationMeta } from '../types/index.js';
+import { encryptField, decryptObject } from '../utils/encryption.js';
 
 export interface CreateVendorInput {
   name: string;
@@ -83,15 +84,15 @@ export class VendorService {
       email: input.email?.trim().toLowerCase() || null,
       phone: input.phone?.trim() || null,
       type: input.type ?? 'BUSINESS',
-      gstin: input.gstin?.trim().toUpperCase() || null,
-      pan: input.pan?.trim().toUpperCase() || null,
+      gstin: input.gstin ? encryptField(input.gstin.trim().toUpperCase()) : null,
+      pan: input.pan ? encryptField(input.pan.trim().toUpperCase()) : null,
       address: input.address?.trim() || null,
       city: input.city?.trim() || null,
       state: input.state?.trim() || null,
       country: input.country?.trim() || 'India',
       postalCode: input.postalCode?.trim() || null,
       bankName: input.bankName?.trim() || null,
-      accountNumber: input.accountNumber?.trim() || null,
+      accountNumber: input.accountNumber ? encryptField(input.accountNumber.trim()) : null,
       ifscCode: input.ifscCode?.trim().toUpperCase() || null,
       branch: input.branch?.trim() || null,
       openingBalance: input.openingBalance !== undefined ? new Prisma.Decimal(input.openingBalance) : new Prisma.Decimal(0),
@@ -109,7 +110,7 @@ export class VendorService {
       select: vendorSelect
     });
 
-    return vendor;
+    return decryptObject(vendor, ['gstin', 'pan', 'accountNumber']);
   }
 
   static async findById(companyId: string, vendorId: string) {
@@ -141,7 +142,7 @@ export class VendorService {
       throw AppError.notFound('Vendor not found');
     }
 
-    return vendor;
+    return decryptObject(vendor, ['gstin', 'pan', 'accountNumber']);
   }
 
   static async list(companyId: string, query: ListVendorsQuery) {
@@ -195,7 +196,9 @@ export class VendorService {
       hasPrevPage: page > 1
     };
 
-    return { vendors, meta };
+    const decryptedVendors = vendors.map((v) => decryptObject(v, ['gstin', 'pan', 'accountNumber']));
+
+    return { vendors: decryptedVendors, meta };
   }
 
   static async update(companyId: string, vendorId: string, input: UpdateVendorInput) {
@@ -208,15 +211,17 @@ export class VendorService {
       ...(input.email !== undefined ? { email: input.email?.trim().toLowerCase() || null } : {}),
       ...(input.phone !== undefined ? { phone: input.phone?.trim() || null } : {}),
       ...(input.type !== undefined ? { type: input.type } : {}),
-      ...(input.gstin !== undefined ? { gstin: input.gstin?.trim().toUpperCase() || null } : {}),
-      ...(input.pan !== undefined ? { pan: input.pan?.trim().toUpperCase() || null } : {}),
+      ...(input.gstin !== undefined ? { gstin: input.gstin ? encryptField(input.gstin.trim().toUpperCase()) : null } : {}),
+      ...(input.pan !== undefined ? { pan: input.pan ? encryptField(input.pan.trim().toUpperCase()) : null } : {}),
       ...(input.address !== undefined ? { address: input.address?.trim() || null } : {}),
       ...(input.city !== undefined ? { city: input.city?.trim() || null } : {}),
       ...(input.state !== undefined ? { state: input.state?.trim() || null } : {}),
       ...(input.country !== undefined ? { country: input.country?.trim() || 'India' } : {}),
       ...(input.postalCode !== undefined ? { postalCode: input.postalCode?.trim() || null } : {}),
       ...(input.bankName !== undefined ? { bankName: input.bankName?.trim() || null } : {}),
-      ...(input.accountNumber !== undefined ? { accountNumber: input.accountNumber?.trim() || null } : {}),
+      ...(input.accountNumber !== undefined
+        ? { accountNumber: input.accountNumber ? encryptField(input.accountNumber.trim()) : null }
+        : {}),
       ...(input.ifscCode !== undefined ? { ifscCode: input.ifscCode?.trim().toUpperCase() || null } : {}),
       ...(input.branch !== undefined ? { branch: input.branch?.trim() || null } : {}),
       ...(input.openingBalance !== undefined
@@ -238,7 +243,7 @@ export class VendorService {
       select: vendorSelect
     });
 
-    return updated;
+    return decryptObject(updated, ['gstin', 'pan', 'accountNumber']);
   }
 
   static async delete(companyId: string, vendorId: string) {

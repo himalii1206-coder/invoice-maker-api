@@ -34,14 +34,16 @@ export class InvoiceDocumentController {
 
       const { buffer, fileName } = await PdfService.renderInvoice(companyId, invoiceId);
 
-      await ActivityService.log({
-        companyId,
-        invoiceId,
-        userId: req.user?.userId,
-        action: ActivityType.PDF_DOWNLOADED,
-        description: inline ? 'Invoice opened for printing' : 'Invoice PDF downloaded',
-        ipAddress: req.ip ?? null
-      });
+      if (!inline) {
+        await ActivityService.log({
+          companyId,
+          invoiceId,
+          userId: req.user?.userId,
+          action: ActivityType.PDF_DOWNLOADED,
+          description: 'Invoice PDF downloaded',
+          ipAddress: req.ip ?? null
+        });
+      }
 
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Length', buffer.length);

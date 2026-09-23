@@ -20,7 +20,8 @@ const envSchema = z.object({
   SMTP_PORT: z.coerce.number().default(587),
   SMTP_USER: z.string().optional(),
   SMTP_PASS: z.string().optional(),
-  SMTP_FROM: z.string().optional()
+  SMTP_FROM: z.string().optional(),
+  ENCRYPTION_KEY: z.string().optional()
 });
 
 const parsedEnv = envSchema.safeParse(process.env);
@@ -35,6 +36,7 @@ export const config = {
   env: parsedEnv.data.NODE_ENV,
   isDev: parsedEnv.data.NODE_ENV === 'development',
   databaseUrl: parsedEnv.data.DATABASE_URL,
+  encryptionKey: parsedEnv.data.ENCRYPTION_KEY || parsedEnv.data.JWT_ACCESS_SECRET,
   jwt: {
     accessSecret: parsedEnv.data.JWT_ACCESS_SECRET,
     refreshSecret: parsedEnv.data.JWT_REFRESH_SECRET,

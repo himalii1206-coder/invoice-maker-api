@@ -5,6 +5,7 @@ import { PaginationMeta } from '../types/index.js';
 import { InvoiceSettingsService } from './invoiceSettings.js';
 import { NumberingService } from './numbering.js';
 import { NotificationService } from './notification.js';
+import { encryptField, decryptObject } from '../utils/encryption.js';
 
 export interface CreateCustomerInput {
   name: string;
@@ -139,7 +140,9 @@ export class CustomerService {
       hasPrevPage: page > 1
     };
 
-    return { customers, meta };
+    const decryptedCustomers = customers.map((c) => decryptObject(c, ['gstin', 'accountNumber']));
+
+    return { customers: decryptedCustomers, meta };
   }
 
   static async getById(companyId: string, id: string) {
@@ -156,7 +159,8 @@ export class CustomerService {
     }
 
     const { _count, ...rest } = customer;
-    return { ...rest, invoiceCount: _count.invoices };
+    const decryptedRest = decryptObject(rest, ['gstin', 'accountNumber']);
+    return { ...decryptedRest, invoiceCount: _count.invoices };
   }
 
   /**
@@ -212,34 +216,34 @@ export class CustomerService {
       );
 
       return tx.customer.create({
-      data: {
-        companyId,
-        customerCode,
-        name: input.name,
-        email: input.email ?? null,
-        phone: input.phone ?? null,
-        type: input.type ?? 'BUSINESS',
-        gstin: input.gstin ?? null,
-        address: input.address ?? null,
-        factoryAddress: input.factoryAddress ?? null,
-        city: input.city ?? null,
-        state: input.state ?? null,
-        country: input.country ?? 'India',
-        postalCode: input.postalCode ?? null,
-        officeNo: input.officeNo ?? null,
-        contactPerson: input.contactPerson ?? null,
-        accountGroup: input.accountGroup ?? null,
-        openingBalance: input.openingBalance !== undefined ? input.openingBalance : 0,
-        openingBalanceDate: input.openingBalanceDate ? new Date(input.openingBalanceDate) : null,
-        balanceType: input.balanceType ?? null,
-        partyCategory: input.partyCategory ?? null,
-        narration1: input.narration1 ?? null,
-        narration2: input.narration2 ?? null,
-        bankName: input.bankName ?? null,
-        accountNumber: input.accountNumber ?? null,
-        ifscCode: input.ifscCode ?? null,
-        isActive: input.isActive ?? true
-      },
+        data: {
+          companyId,
+          customerCode,
+          name: input.name,
+          email: input.email ?? null,
+          phone: input.phone ?? null,
+          type: input.type ?? 'BUSINESS',
+          gstin: input.gstin ? encryptField(input.gstin.trim().toUpperCase()) : null,
+          address: input.address ?? null,
+          factoryAddress: input.factoryAddress ?? null,
+          city: input.city ?? null,
+          state: input.state ?? null,
+          country: input.country ?? 'India',
+          postalCode: input.postalCode ?? null,
+          officeNo: input.officeNo ?? null,
+          contactPerson: input.contactPerson ?? null,
+          accountGroup: input.accountGroup ?? null,
+          openingBalance: input.openingBalance !== undefined ? input.openingBalance : 0,
+          openingBalanceDate: input.openingBalanceDate ? new Date(input.openingBalanceDate) : null,
+          balanceType: input.balanceType ?? null,
+          partyCategory: input.partyCategory ?? null,
+          narration1: input.narration1 ?? null,
+          narration2: input.narration2 ?? null,
+          bankName: input.bankName ?? null,
+          accountNumber: input.accountNumber ? encryptField(input.accountNumber.trim()) : null,
+          ifscCode: input.ifscCode ?? null,
+          isActive: input.isActive ?? true
+        },
         select: customerSelect
       });
     });
@@ -252,7 +256,7 @@ export class CustomerService {
       link: `/customers/${customer.id}`
     });
 
-    return customer;
+    return decryptObject(customer, ['gstin', 'accountNumber']);
   }
 
   static async update(companyId: string, id: string, input: UpdateCustomerInput) {
@@ -276,6 +280,10 @@ export class CustomerService {
       if (key in input) {
         if (key === 'openingBalanceDate') {
           data.openingBalanceDate = input.openingBalanceDate ? new Date(input.openingBalanceDate) : null;
+        } else if (key === 'gstin') {
+          data.gstin = input.gstin ? encryptField(input.gstin.trim().toUpperCase()) : null;
+        } else if (key === 'accountNumber') {
+          data.accountNumber = input.accountNumber ? encryptField(input.accountNumber.trim()) : null;
         } else {
           (data as any)[key] = input[key] ?? null;
         }
@@ -317,11 +325,13 @@ export class CustomerService {
     if (data.country === null) delete (data as any).country;
     if (data.isActive === null) delete (data as any).isActive;
 
-    return prisma.customer.update({
+    const updated = await prisma.customer.update({
       where: { id },
       data,
       select: customerSelect
     });
+
+    return decryptObject(updated, ['gstin', 'accountNumber']);
   }
 
   static async remove(companyId: string, id: string) {

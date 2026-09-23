@@ -10,6 +10,7 @@ import { InvoiceSettingsService } from './invoiceSettings.js';
 import { InvoiceService } from './invoice.js';
 import { ActivityService } from './activity.js';
 import { NotificationService } from './notification.js';
+import { decryptObject } from '../utils/encryption.js';
 
 /**
  * Credit and debit notes.
@@ -729,7 +730,7 @@ export class CreditDebitNoteService {
       throw AppError.badRequest('Selected customer was not found in your business');
     }
 
-    return customer;
+    return decryptObject(customer, ['gstin']);
   }
 
   private static async getLinkableInvoice(

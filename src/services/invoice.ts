@@ -9,6 +9,7 @@ import { NumberingService } from './numbering.js';
 import { InvoiceSettingsService } from './invoiceSettings.js';
 import { NotificationService } from './notification.js';
 import { ActivityService } from './activity.js';
+import { decryptObject } from '../utils/encryption.js';
 
 /**
  * Invoice service.
@@ -1584,7 +1585,7 @@ export class InvoiceService {
       throw AppError.notFound('No business profile found for this account');
     }
 
-    return company;
+    return decryptObject(company, ['gstin', 'pan', 'accountNumber', 'upiId']);
   }
 
   private static async getCustomer(companyId: string, customerId: string) {
@@ -1609,7 +1610,7 @@ export class InvoiceService {
       throw AppError.badRequest('Selected customer was not found in your business');
     }
 
-    return customer;
+    return decryptObject(customer, ['gstin']);
   }
 
   /** Trims and coerces line input into what the tax engine expects. */
