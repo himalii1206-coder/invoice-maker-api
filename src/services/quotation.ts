@@ -641,7 +641,7 @@ export class QuotationService {
     const sortBy = params.sortBy || 'quotationDate';
     const sortOrder = params.sortOrder || 'desc';
 
-    const [items, total, summaryAgg] = await Promise.all([
+    const [items, total, summaryAgg, convertedAgg] = await Promise.all([
       prisma.quotation.findMany({
         where,
         skip,
@@ -660,6 +660,10 @@ export class QuotationService {
       prisma.quotation.aggregate({
         where: { companyId },
         _count: { id: true },
+        _sum: { grandTotal: true }
+      }),
+      prisma.quotation.aggregate({
+        where: { companyId, status: QuotationStatus.CONVERTED },
         _sum: { grandTotal: true }
       })
     ]);
@@ -702,8 +706,10 @@ export class QuotationService {
         hasPrevPage: page > 1
       },
       summary: {
+        totalCount: summaryAgg._count.id || 0,
         totalQuotations: summaryAgg._count.id || 0,
         totalValue: toNumber(summaryAgg._sum.grandTotal || 0),
+        convertedValue: toNumber(convertedAgg._sum.grandTotal || 0),
         draftCount: countsMap[QuotationStatus.DRAFT] || 0,
         sentCount: countsMap[QuotationStatus.SENT] || 0,
         acceptedCount: countsMap[QuotationStatus.ACCEPTED] || 0,

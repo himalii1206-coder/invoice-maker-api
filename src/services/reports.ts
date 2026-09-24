@@ -595,7 +595,8 @@ export class ReportService {
       allPayments,
       rawCustomers,
       invoiceItems,
-      purchaseBills
+      purchaseBills,
+      rawQuotations
     ] = await Promise.all([
       prisma.company.findUnique({
         where: { id: companyId },
@@ -688,6 +689,34 @@ export class ReportService {
           taxAmount: true,
           status: true
         }
+      }),
+      prisma.quotation.findMany({
+        where: {
+          companyId,
+          ...(scope.financialYear ? { financialYear: scope.financialYear } : {}),
+          ...(scope.dateFrom || scope.dateTo
+            ? {
+                quotationDate: {
+                  ...(scope.dateFrom && { gte: startOfDay(scope.dateFrom) }),
+                  ...(scope.dateTo && { lte: endOfDay(scope.dateTo) })
+                }
+              }
+            : {})
+        },
+        select: {
+          id: true,
+          quotationNumber: true,
+          customerId: true,
+          billingName: true,
+          quotationDate: true,
+          status: true,
+          grandTotal: true,
+          convertedInvoiceId: true,
+          validUntil: true,
+          createdAt: true,
+          convertedAt: true
+        },
+        orderBy: { quotationDate: 'desc' }
       })
     ]);
 
@@ -913,6 +942,145 @@ export class ReportService {
       .sort((a, b) => b.invoiced - a.invoiced)
       .slice(0, 10);
 
+    // ----------------------------------------------------
+    // QUOTATION & DEAL PIPELINE METRICS
+    // ----------------------------------------------------
+    let totalQuotedValue = 0;
+    const totalQuotations = rawQuotations.length;
+    let acceptedQuotesCount = 0;
+    let acceptedQuotesValue = 0;
+    let convertedQuotesCount = 0;
+    let convertedQuotesValue = 0;
+    let draftQuotesCount = 0;
+    let sentQuotesCount = 0;
+    let sentQuotesValue = 0;
+    let lostQuotesCount = 0;
+    let lostQuotesValue = 0;
+
+    const quotationStatusMap: Record<string, { count: number; amount: number }> = {
+      DRAFT: { count: 0, amount: 0 },
+      SENT: { count: 0, amount: 0 },
+      ACCEPTED: { count: 0, amount: 0 },
+      CONVERTED: { count: 0, amount: 0 },
+      EXPIRED: { count: 0, amount: 0 },
+      REJECTED: { count: 0, amount: 0 },
+      CANCELLED: { count: 0, amount: 0 }
+    };
+
+    for (const q of rawQuotations) {
+      const qVal = toNumber(q.grandTotal);
+      totalQuotedValue = round2(totalQuotedValue + qVal);
+      const st = q.status;
+
+      if (!quotationStatusMap[st]) {
+        quotationStatusMap[st] = { count: 0, amount: 0 };
+      }
+      quotationStatusMap[st].count += 1;
+      quotationStatusMap[st].amount = round2(quotationStatusMap[st].amount + qVal);
+
+      if (st === 'CONVERTED') {
+        convertedQuotesCount += 1;
+        convertedQuotesValue = round2(convertedQuotesValue + qVal);
+      } else if (st === 'ACCEPTED') {
+        acceptedQuotesCount += 1;
+        acceptedQuotesValue = round2(acceptedQuotesValue + qVal);
+      } else if (st === 'SENT') {
+        sentQuotesCount += 1;
+        sentQuotesValue = round2(sentQuotesValue + qVal);
+      } else if (st === 'DRAFT') {
+        draftQuotesCount += 1;
+      } else if (['REJECTED', 'EXPIRED', 'CANCELLED'].includes(st)) {
+        lostQuotesCount += 1;
+        lostQuotesValue = round2(lostQuotesValue + qVal);
+      }
+    }
+
+    const quotationConversionRate = totalQuotations > 0
+      ? round2((convertedQuotesCount / totalQuotations) * 100)
+      : 0;
+
+    const activePipelineValue = round2(sentQuotesValue + acceptedQuotesValue);
+    const averageQuotationValue = totalQuotations > 0 ? round2(totalQuotedValue / totalQuotations) : 0;
+
+    const quotationByStatus = Object.entries(quotationStatusMap).map(([status, val]) => ({
+      status,
+      label: status.replace(/_/g, ' '),
+      count: val.count,
+      amount: val.amount,
+      percentage: totalQuotedValue > 0 ? Math.round((val.amount / totalQuotedValue) * 100) : 0
+    }));
+
+    // Monthly quotation trends
+    const qMonthlyMap = new Map<string, { month: string; quoted: number; converted: number; count: number }>();
+    for (const m of monthlyTrends) {
+      qMonthlyMap.set(m.month, {
+        month: m.month,
+        quoted: 0,
+        converted: 0,
+        count: 0
+      });
+    }
+
+    for (const q of rawQuotations) {
+      const d = new Date(q.quotationDate);
+      const mKey = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+      const qVal = toNumber(q.grandTotal);
+      if (monthlyMap.has(mKey)) {
+        const mLabel = monthlyMap.get(mKey)!.month;
+        if (qMonthlyMap.has(mLabel)) {
+          const obj = qMonthlyMap.get(mLabel)!;
+          obj.quoted = round2(obj.quoted + qVal);
+          obj.count += 1;
+          if (q.status === 'CONVERTED') {
+            obj.converted = round2(obj.converted + qVal);
+          }
+        }
+      }
+    }
+
+    const quotationByCustomerMap = new Map<string, { customerId: string; name: string; quoted: number; converted: number; count: number }>();
+    for (const q of rawQuotations) {
+      const cId = q.customerId || 'direct-cash';
+      const cName = q.billingName || 'Direct / Walk-in';
+      const existing = quotationByCustomerMap.get(cId) ?? {
+        customerId: cId,
+        name: cName,
+        quoted: 0,
+        converted: 0,
+        count: 0
+      };
+      existing.quoted = round2(existing.quoted + toNumber(q.grandTotal));
+      existing.count += 1;
+      if (q.status === 'CONVERTED') {
+        existing.converted = round2(existing.converted + toNumber(q.grandTotal));
+      }
+      quotationByCustomerMap.set(cId, existing);
+    }
+
+    const quotationByCustomer = Array.from(quotationByCustomerMap.values())
+      .sort((a, b) => b.quoted - a.quoted)
+      .slice(0, 10);
+
+    const quotationPipeline = {
+      totalQuotations,
+      totalQuotedValue,
+      convertedQuotesCount,
+      convertedQuotesValue,
+      acceptedQuotesCount,
+      acceptedQuotesValue,
+      sentQuotesCount,
+      sentQuotesValue,
+      draftQuotesCount,
+      lostQuotesCount,
+      lostQuotesValue,
+      activePipelineValue,
+      conversionRatePercent: quotationConversionRate,
+      averageQuotationValue,
+      byStatus: quotationByStatus,
+      byMonth: Array.from(qMonthlyMap.values()),
+      byCustomer: quotationByCustomer
+    };
+
     const salesAnalytics = {
       byDay: dailyTrends,
       byWeek: weeklyTrends,
@@ -920,6 +1088,7 @@ export class ReportService {
       growthRatePercent: salesGrowthPercent,
       byStatus: salesByStatus,
       byCustomer: salesByCustomer,
+      quotationPipeline,
       companyOverview: {
         name: company?.name ?? 'Business',
         gstin: company?.gstin ?? 'Unregistered',
@@ -1196,6 +1365,7 @@ export class ReportService {
     return {
       periodLabel: label,
       salesAnalytics,
+      quotationAnalytics: quotationPipeline,
       invoiceAnalytics,
       paymentAnalytics,
       gstAnalytics,
