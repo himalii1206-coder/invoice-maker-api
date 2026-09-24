@@ -150,7 +150,7 @@ export class CustomerService {
       where: { id, companyId },
       select: {
         ...customerSelect,
-        _count: { select: { invoices: true } }
+        _count: { select: { invoices: true, quotations: true } }
       }
     });
 
@@ -160,7 +160,7 @@ export class CustomerService {
 
     const { _count, ...rest } = customer;
     const decryptedRest = decryptObject(rest, ['gstin', 'accountNumber']);
-    return { ...decryptedRest, invoiceCount: _count.invoices };
+    return { ...decryptedRest, invoiceCount: _count.invoices, quotationCount: _count.quotations };
   }
 
   /**

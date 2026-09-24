@@ -20,6 +20,7 @@ export const invoiceSettingsSelect = {
   invoiceSuffix: true,
   creditNotePrefix: true,
   debitNotePrefix: true,
+  quotationPrefix: true,
   numberSeparator: true,
   numberPadding: true,
   startNumber: true,
@@ -72,6 +73,7 @@ export interface UpdateInvoiceSettingsInput {
   invoiceSuffix?: string | null;
   creditNotePrefix?: string;
   debitNotePrefix?: string;
+  quotationPrefix?: string;
   numberSeparator?: string;
   numberPadding?: number;
   startNumber?: number;

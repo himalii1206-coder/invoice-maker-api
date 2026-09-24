@@ -593,6 +593,7 @@ export class PdfService {
 
         const subtotal = toNumber(invoice.subtotal);
         const discountAmount = toNumber(invoice.discountAmount);
+        const extraCharges = toNumber((invoice as any).extraCharges);
         const cgstAmount = toNumber(invoice.cgstAmount);
         const sgstAmount = toNumber(invoice.sgstAmount);
         const igstAmount = toNumber(invoice.igstAmount);
@@ -609,7 +610,7 @@ export class PdfService {
 
         if (discountAmount > 0) {
           totalRows.push({
-            label: 'Extra Charges / Disc.',
+            label: 'Discount:',
             value: `- ${formatPdfMoney(discountAmount, true)}`
           });
         }
@@ -627,6 +628,13 @@ export class PdfService {
           totalRows.push({
             label: `SGST (${halfRate}%):`,
             value: formatPdfMoney(sgstAmount, true)
+          });
+        }
+
+        if (extraCharges > 0) {
+          totalRows.push({
+            label: 'Extra Charges:',
+            value: formatPdfMoney(extraCharges, true)
           });
         }
 

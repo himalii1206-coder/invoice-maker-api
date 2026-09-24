@@ -39,9 +39,10 @@ model User {
   createdAt     DateTime          @default(now())
   updatedAt     DateTime          @updatedAt
   company       Company?
-  sessions      Session[]
-  activities    InvoiceActivity[]
-  memberships   CompanyMember[]   @relation("MemberUser")
+  sessions            Session[]
+  activities          InvoiceActivity[]
+  quotationActivities QuotationActivity[]
+  memberships         CompanyMember[]   @relation("MemberUser")
   invitesSent   CompanyMember[]   @relation("MemberInvitedBy")
   notifications Notification[]
 
@@ -103,6 +104,8 @@ model Company {
   sequences              DocumentSequence[]
   notes                  CreditDebitNote[]
   activities             InvoiceActivity[]
+  quotations             Quotation[]
+  quotationActivities    QuotationActivity[]
   vendors                Vendor[]
   purchaseBills          PurchaseBill[]
   purchasePayments       PurchasePayment[]
@@ -145,6 +148,7 @@ model Customer {
   updatedAt          DateTime           @updatedAt
   company            Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
   invoices           Invoice[]
+  quotations         Quotation[]
   products           Product[]
   notes              CreditDebitNote[]
 
@@ -236,6 +240,7 @@ model Invoice {
   cgstAmount      Decimal @default(0.00) @db.Decimal(14, 2)
   sgstAmount      Decimal @default(0.00) @db.Decimal(14, 2)
   igstAmount      Decimal @default(0.00) @db.Decimal(14, 2)
+  extraCharges    Decimal @default(0.00) @db.Decimal(14, 2)
   roundOff        Decimal @default(0.00) @db.Decimal(8, 2)
   grandTotal      Decimal @db.Decimal(14, 2)
   amountPaid      Decimal @default(0.00) @db.Decimal(14, 2)
@@ -262,6 +267,7 @@ model Invoice {
   payments   Payment[]
   notesDocs  CreditDebitNote[]
   activities InvoiceActivity[]
+  quotations Quotation[]
 
   @@unique([companyId, invoiceNumber])
   @@index([companyId])
@@ -448,6 +454,7 @@ model InvoiceSettings {
   invoiceSuffix       String?
   creditNotePrefix    String          @default("CN")
   debitNotePrefix     String          @default("DN")
+  quotationPrefix     String          @default("QT")
   numberSeparator     String          @default("-")
   numberPadding       Int             @default(4)
   startNumber         Int             @default(1)
@@ -674,6 +681,7 @@ enum DocumentType {
   PURCHASE_BILL
   CUSTOMER
   PRODUCT
+  QUOTATION
 }
 
 /// Business events a user can subscribe to in notification settings.
@@ -886,3 +894,147 @@ model PurchasePayment {
   @@index([companyId, paymentDate])
   @@map("purchase_payments")
 }
+
+// ---------------------------------------------------------------------------
+// Quotations & Estimates
+// ---------------------------------------------------------------------------
+
+model Quotation {
+  id                 String          @id @default(uuid())
+  companyId          String
+  customerId         String?
+  convertedInvoiceId String?
+  quotationNumber    String
+  sequenceNo         Int             @default(0)
+  financialYear      String          @default("")
+  status             QuotationStatus @default(DRAFT)
+  subject            String?
+  inquiryNumber      String?
+  inquiryDate        DateTime?
+  referenceNumber    String?
+  quotationDate      DateTime        @default(now())
+  validUntil         DateTime?
+  paymentTerms       String?         @default("50% Advance")
+  currency           String          @default("INR")
+
+  /// Customer Snapshot at time of quotation
+  billingName       String  @default("")
+  billingEmail      String?
+  billingPhone      String?
+  billingGstin      String?
+  billingAddress    String?
+  billingCity       String?
+  billingState      String?
+  billingCountry    String  @default("India")
+  billingPostalCode String?
+
+  /// Destination state for GST
+  placeOfSupply     String?
+  placeOfSupplyCode String?
+  isIgst            Boolean @default(false)
+
+  /// Financial Totals
+  subtotal                  Decimal @db.Decimal(14, 2)
+  discountAmount            Decimal @default(0.00) @db.Decimal(14, 2)
+  taxableAmount             Decimal @default(0.00) @db.Decimal(14, 2)
+  cgstAmount                Decimal @default(0.00) @db.Decimal(14, 2)
+  sgstAmount                Decimal @default(0.00) @db.Decimal(14, 2)
+  igstAmount                Decimal @default(0.00) @db.Decimal(14, 2)
+  taxAmount                 Decimal @db.Decimal(14, 2)
+  forwardingPackagingAmount Decimal @default(0.00) @db.Decimal(14, 2)
+  secondTotal               Decimal @default(0.00) @db.Decimal(14, 2)
+  roundOff                  Decimal @default(0.00) @db.Decimal(8, 2)
+  grandTotal                Decimal @db.Decimal(14, 2)
+
+  notes           String?
+  terms           String?
+  rejectionReason String?
+  cancelledReason String?
+
+  sentAt      DateTime?
+  acceptedAt  DateTime?
+  rejectedAt  DateTime?
+  convertedAt DateTime?
+  cancelledAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company          Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  customer         Customer?           @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  convertedInvoice Invoice?            @relation(fields: [convertedInvoiceId], references: [id], onDelete: SetNull)
+  items            QuotationItem[]
+  activities       QuotationActivity[]
+
+  @@unique([companyId, quotationNumber])
+  @@index([companyId])
+  @@index([customerId])
+  @@index([status])
+  @@index([companyId, quotationDate])
+  @@index([companyId, financialYear])
+  @@map("quotations")
+}
+
+model QuotationItem {
+  id          String  @id @default(uuid())
+  quotationId String
+  productId   String?
+  name        String
+  description String?
+  hsnSacCode  String?
+  unit        String  @default("PCS")
+  sortOrder   Int     @default(0)
+
+  quantity        Decimal @db.Decimal(12, 3)
+  rate            Decimal @db.Decimal(14, 2)
+  discountPercent Decimal @default(0.00) @db.Decimal(5, 2)
+  discountAmount  Decimal @default(0.00) @db.Decimal(14, 2)
+  taxRate         Decimal @default(0.00) @db.Decimal(5, 2)
+
+  subtotal      Decimal @db.Decimal(14, 2)
+  taxableAmount Decimal @default(0.00) @db.Decimal(14, 2)
+  cgstRate      Decimal @default(0.00) @db.Decimal(5, 2)
+  cgstAmount    Decimal @default(0.00) @db.Decimal(14, 2)
+  sgstRate      Decimal @default(0.00) @db.Decimal(5, 2)
+  sgstAmount    Decimal @default(0.00) @db.Decimal(14, 2)
+  igstRate      Decimal @default(0.00) @db.Decimal(5, 2)
+  igstAmount    Decimal @default(0.00) @db.Decimal(14, 2)
+  taxAmount     Decimal @db.Decimal(14, 2)
+  amount        Decimal @db.Decimal(14, 2)
+
+  quotation Quotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+
+  @@index([quotationId])
+  @@map("quotation_items")
+}
+
+model QuotationActivity {
+  id          String       @id @default(uuid())
+  companyId   String
+  quotationId String
+  userId      String?
+  action      ActivityType
+  description String
+  metadata    Json?
+  ipAddress   String?
+  createdAt   DateTime     @default(now())
+
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  quotation Quotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+  user      User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([quotationId, createdAt])
+  @@index([companyId, createdAt])
+  @@map("quotation_activities")
+}
+
+enum QuotationStatus {
+  DRAFT
+  SENT
+  ACCEPTED
+  REJECTED
+  EXPIRED
+  CONVERTED
+  CANCELLED
+}
+

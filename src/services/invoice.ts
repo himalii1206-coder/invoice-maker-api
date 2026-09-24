@@ -1,4 +1,4 @@
-import { Prisma, InvoiceStatus, DocumentType, ActivityType, NotificationEvent } from '@prisma/client';
+import { Prisma, InvoiceStatus, QuotationStatus, DocumentType, ActivityType, NotificationEvent } from '@prisma/client';
 import { prisma } from '../config/database.js';
 import { AppError } from '../utils/error.js';
 import { PaginationMeta } from '../types/index.js';
@@ -9,7 +9,19 @@ import { NumberingService } from './numbering.js';
 import { InvoiceSettingsService } from './invoiceSettings.js';
 import { NotificationService } from './notification.js';
 import { ActivityService } from './activity.js';
-import { decryptObject } from '../utils/encryption.js';
+import { decryptField, decryptObject } from '../utils/encryption.js';
+
+const decryptInvoice = <T extends Record<string, any>>(inv: T): T => {
+  if (!inv) return inv;
+  const result: any = Array.isArray(inv) ? [...inv] : { ...inv };
+  if (result.billingGstin) {
+    result.billingGstin = decryptField(result.billingGstin);
+  }
+  if (result.customer) {
+    result.customer = decryptObject(result.customer, ['gstin', 'accountNumber']);
+  }
+  return result;
+};
 
 /**
  * Invoice service.
@@ -38,6 +50,7 @@ export interface InvoiceItemInput {
 
 export interface CreateInvoiceInput {
   customerId: string;
+  quotationId?: string | null;
   /** Optional manual override; omitted means allocate from the sequence. */
   invoiceNumber?: string;
   billType?: string;
@@ -57,6 +70,7 @@ export interface CreateInvoiceInput {
   currency?: string;
   placeOfSupply?: string | null;
   isReverseCharge?: boolean;
+  extraCharges?: number;
   notes?: string | null;
   terms?: string | null;
   internalNotes?: string | null;
@@ -147,6 +161,7 @@ const invoiceListSelect = {
   cgstAmount: true,
   sgstAmount: true,
   igstAmount: true,
+  extraCharges: true,
   roundOff: true,
   grandTotal: true,
   amountPaid: true,
@@ -170,6 +185,13 @@ const invoiceListSelect = {
   updatedAt: true,
   customerId: true,
   customer: { select: { id: true, name: true, type: true, email: true, isActive: true } },
+  quotations: {
+    select: {
+      id: true,
+      quotationNumber: true,
+      status: true
+    }
+  },
   _count: { select: { payments: true } }
 } satisfies Prisma.InvoiceSelect;
 
@@ -258,6 +280,17 @@ const invoiceDetailSelect = {
       status: true,
       grandTotal: true,
       reason: true
+    }
+  },
+  quotations: {
+    select: {
+      id: true,
+      quotationNumber: true,
+      quotationDate: true,
+      status: true,
+      subject: true,
+      inquiryNumber: true,
+      grandTotal: true
     }
   }
 } satisfies Prisma.InvoiceSelect;
@@ -515,7 +548,7 @@ export class InvoiceService {
     };
 
     return {
-      invoices,
+      invoices: invoices.map(decryptInvoice),
       meta,
       summary: {
         totalAmount: round2(totals._sum.grandTotal ?? 0),
@@ -535,7 +568,7 @@ export class InvoiceService {
       throw AppError.notFound('Invoice not found');
     }
 
-    return invoice;
+    return decryptInvoice(invoice);
   }
 
   /**
@@ -856,12 +889,14 @@ export class InvoiceService {
       throw AppError.badRequest('Due date cannot be earlier than the issue date');
     }
 
+    const extraCharges = round2(input.extraCharges ?? 0);
     const supply = resolveSupply(company.state, customer.state, input.placeOfSupply);
     const computed = computeDocument(this.normaliseItems(input.items), {
       isIgst: supply.isIgst,
       enableRoundOff: settings.enableRoundOff,
       gstEnabled: settings.gstEnabled,
-      pricesIncludeTax: settings.pricesIncludeTax
+      pricesIncludeTax: settings.pricesIncludeTax,
+      extraCharges
     });
 
     const status = input.status === InvoiceStatus.SENT ? InvoiceStatus.SENT : InvoiceStatus.DRAFT;
@@ -901,7 +936,7 @@ export class InvoiceService {
             billingName: customer.name,
             billingEmail: customer.email,
             billingPhone: customer.phone,
-            billingGstin: customer.gstin,
+            billingGstin: decryptField(customer.gstin),
             billingAddress: customer.address,
             billingCity: customer.city,
             billingState: customer.state,
@@ -920,6 +955,7 @@ export class InvoiceService {
             cgstAmount: computed.cgstAmount,
             sgstAmount: computed.sgstAmount,
             igstAmount: computed.igstAmount,
+            extraCharges: new Prisma.Decimal(extraCharges),
             roundOff: computed.roundOff,
             grandTotal: computed.grandTotal,
             amountPaid: 0,
@@ -958,6 +994,39 @@ export class InvoiceService {
           },
           select: { id: true, invoiceNumber: true, grandTotal: true }
         });
+
+        // If this invoice was created from an accepted/referenced quotation, mark it as CONVERTED
+        if (input.quotationId) {
+          const quotation = await tx.quotation.findFirst({
+            where: { id: input.quotationId, companyId }
+          });
+          if (quotation) {
+            await tx.quotation.update({
+              where: { id: quotation.id },
+              data: {
+                status: QuotationStatus.CONVERTED,
+                convertedInvoiceId: invoice.id,
+                convertedAt: new Date()
+              }
+            });
+
+            await tx.quotationActivity.create({
+              data: {
+                companyId,
+                quotationId: quotation.id,
+                userId: context.userId ?? null,
+                action: ActivityType.STATUS_CHANGED,
+                description: `Converted to Tax Invoice ${invoice.invoiceNumber}`,
+                metadata: {
+                  invoiceId: invoice.id,
+                  invoiceNumber: invoice.invoiceNumber,
+                  grandTotal: computed.grandTotal
+                },
+                ipAddress: context.ipAddress ?? null
+              }
+            });
+          }
+        }
 
         return invoice;
       },
@@ -1005,7 +1074,8 @@ export class InvoiceService {
         creditNoteTotal: true,
         debitNoteTotal: true,
         currency: true,
-        placeOfSupply: true
+        placeOfSupply: true,
+        extraCharges: true
       }
     });
 
@@ -1053,13 +1123,15 @@ export class InvoiceService {
       ...('terms' in input && { terms: input.terms ?? null }),
       ...('internalNotes' in input && { internalNotes: input.internalNotes ?? null }),
       ...(input.currency && { currency: input.currency }),
-      ...(input.isReverseCharge !== undefined && { isReverseCharge: input.isReverseCharge })
+      ...(input.isReverseCharge !== undefined && { isReverseCharge: input.isReverseCharge }),
+      ...(input.extraCharges !== undefined && { extraCharges: new Prisma.Decimal(round2(input.extraCharges)) })
     };
 
     // Re-pricing is only reachable in 'full' mode, guarded above.
-    if (mode === 'full' && (input.items || input.customerId || input.placeOfSupply !== undefined)) {
+    if (mode === 'full' && (input.items || input.customerId || input.placeOfSupply !== undefined || input.extraCharges !== undefined)) {
       const company = await this.getCompanyProfile(companyId);
       const customer = await this.getCustomer(companyId, input.customerId ?? existing.customerId);
+      const extraCharges = round2(input.extraCharges !== undefined ? input.extraCharges : toNumber(existing.extraCharges));
 
       const supply = resolveSupply(
         company.state,
@@ -1073,7 +1145,7 @@ export class InvoiceService {
         data.billingName = customer.name;
         data.billingEmail = customer.email;
         data.billingPhone = customer.phone;
-        data.billingGstin = customer.gstin;
+        data.billingGstin = decryptField(customer.gstin);
         data.billingAddress = customer.address;
         data.billingCity = customer.city;
         data.billingState = customer.state;
@@ -1094,7 +1166,8 @@ export class InvoiceService {
           isIgst: supply.isIgst,
           enableRoundOff: settings.enableRoundOff,
           gstEnabled: settings.gstEnabled,
-          pricesIncludeTax: settings.pricesIncludeTax
+          pricesIncludeTax: settings.pricesIncludeTax,
+          extraCharges
         });
 
         Object.assign(data, {
@@ -1152,7 +1225,8 @@ export class InvoiceService {
           {
             enableRoundOff: settings.enableRoundOff,
             gstEnabled: settings.gstEnabled,
-            pricesIncludeTax: settings.pricesIncludeTax
+            pricesIncludeTax: settings.pricesIncludeTax,
+            extraCharges
           },
           data
         );
@@ -1189,7 +1263,7 @@ export class InvoiceService {
   private static async resplitExistingItems(
     invoiceId: string,
     isIgst: boolean,
-    taxOptions: { enableRoundOff: boolean; gstEnabled: boolean; pricesIncludeTax: boolean },
+    taxOptions: { enableRoundOff: boolean; gstEnabled: boolean; pricesIncludeTax: boolean; extraCharges?: number },
     data: Prisma.InvoiceUpdateInput
   ): Promise<void> {
     const items = await prisma.invoiceItem.findMany({

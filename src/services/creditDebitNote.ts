@@ -10,7 +10,19 @@ import { InvoiceSettingsService } from './invoiceSettings.js';
 import { InvoiceService } from './invoice.js';
 import { ActivityService } from './activity.js';
 import { NotificationService } from './notification.js';
-import { decryptObject } from '../utils/encryption.js';
+import { decryptField, decryptObject } from '../utils/encryption.js';
+
+const decryptCreditDebitNote = <T extends Record<string, any>>(note: T): T => {
+  if (!note) return note;
+  const result: any = Array.isArray(note) ? [...note] : { ...note };
+  if (result.billingGstin) {
+    result.billingGstin = decryptField(result.billingGstin);
+  }
+  if (result.customer) {
+    result.customer = decryptObject(result.customer, ['gstin', 'accountNumber']);
+  }
+  return result;
+};
 
 /**
  * Credit and debit notes.
@@ -217,7 +229,7 @@ export class CreditDebitNoteService {
     };
 
     return {
-      notes,
+      notes: notes.map(decryptCreditDebitNote),
       meta,
       summary: {
         totalAmount: round2(totals._sum.grandTotal ?? 0),
@@ -233,7 +245,7 @@ export class CreditDebitNoteService {
     });
 
     if (!note) throw AppError.notFound('Note not found');
-    return note;
+    return decryptCreditDebitNote(note);
   }
 
   /** Totals for the notes dashboard, split by type. */
@@ -339,7 +351,7 @@ export class CreditDebitNoteService {
             reason: input.reason ?? null,
 
             billingName: customer.name,
-            billingGstin: customer.gstin,
+            billingGstin: decryptField(customer.gstin),
             billingAddress: customer.address,
             billingState: customer.state,
             placeOfSupply: supply.placeOfSupply,

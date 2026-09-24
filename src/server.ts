@@ -2,6 +2,7 @@ import app from './app.js';
 import { config } from './config/index.js';
 import { prisma } from './config/database.js';
 
+// Initialize HTTP Server
 const server = app.listen(config.port, () => {
   console.log(`🚀 Invoice Maker Backend running on port ${config.port} [${config.env}]`);
 });

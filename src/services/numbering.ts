@@ -32,6 +32,8 @@ const prefixFor = (settings: InvoiceSettingsRecord, documentType: DocumentType):
       return settings.creditNotePrefix;
     case DocumentType.DEBIT_NOTE:
       return settings.debitNotePrefix;
+    case DocumentType.QUOTATION:
+      return settings.quotationPrefix || 'QT';
     default:
       return settings.invoicePrefix;
   }
@@ -172,6 +174,14 @@ export class NumberingService {
     if (documentType === DocumentType.INVOICE) {
       const existing = await tx.invoice.findUnique({
         where: { companyId_invoiceNumber: { companyId, invoiceNumber: number } },
+        select: { id: true }
+      });
+      return Boolean(existing);
+    }
+
+    if (documentType === DocumentType.QUOTATION) {
+      const existing = await tx.quotation.findUnique({
+        where: { companyId_quotationNumber: { companyId, quotationNumber: number } },
         select: { id: true }
       });
       return Boolean(existing);

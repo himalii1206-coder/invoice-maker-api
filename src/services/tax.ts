@@ -64,6 +64,7 @@ export interface ComputedTotals {
   sgstAmount: number;
   igstAmount: number;
   taxAmount: number;
+  extraCharges?: number;
   roundOff: number;
   grandTotal: number;
 }
@@ -202,9 +203,10 @@ export const computeLine = (
  */
 export const computeDocument = <T extends TaxLineInput>(
   lines: T[],
-  options: { isIgst: boolean; enableRoundOff?: boolean } & TaxMode
+  options: { isIgst: boolean; enableRoundOff?: boolean; extraCharges?: number } & TaxMode
 ): DocumentTotals<T & ComputedTaxLine> => {
-  const { isIgst, enableRoundOff = true, gstEnabled, pricesIncludeTax } = options;
+  const { isIgst, enableRoundOff = true, gstEnabled, pricesIncludeTax, extraCharges = 0 } = options;
+  const extraPaise = toPaise(Math.max(0, extraCharges));
 
   const computed = lines.map((line) => ({
     ...line,
@@ -233,7 +235,7 @@ export const computeDocument = <T extends TaxLineInput>(
     }
   );
 
-  const beforeRoundOff = totals.taxableAmount + totals.taxAmount;
+  const beforeRoundOff = totals.taxableAmount + totals.taxAmount + extraPaise;
   const { total: roundedTotal, adjustment } = enableRoundOff
     ? roundOffToRupee(beforeRoundOff)
     : { total: beforeRoundOff, adjustment: 0 };
@@ -247,6 +249,7 @@ export const computeDocument = <T extends TaxLineInput>(
     sgstAmount: fromPaise(totals.sgstAmount),
     igstAmount: fromPaise(totals.igstAmount),
     taxAmount: fromPaise(totals.taxAmount),
+    extraCharges: fromPaise(extraPaise),
     roundOff: fromPaise(adjustment),
     grandTotal: fromPaise(roundedTotal)
   };

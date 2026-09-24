@@ -97,9 +97,11 @@ const invoiceBodyFields = {
   currency: z.string().trim().length(3, 'Currency must be a 3 letter code').optional(),
   placeOfSupply: optionalText(80, 'Place of supply'),
   isReverseCharge: z.boolean().optional(),
+  extraCharges: z.coerce.number().min(0, 'Extra charges cannot be negative').max(999999999.99).optional(),
   notes: optionalText(2000, 'Notes'),
   terms: optionalText(2000, 'Terms'),
   internalNotes: optionalText(2000, 'Internal notes'),
+  quotationId: z.string().uuid('Invalid quotation id').optional().nullable(),
   status: z.enum([InvoiceStatus.DRAFT, InvoiceStatus.SENT]).optional(),
   items: z
     .array(invoiceItemSchema)
@@ -128,9 +130,11 @@ export const createInvoiceSchema = z.object({
     currency: invoiceBodyFields.currency,
     placeOfSupply: invoiceBodyFields.placeOfSupply,
     isReverseCharge: invoiceBodyFields.isReverseCharge,
+    extraCharges: invoiceBodyFields.extraCharges,
     notes: invoiceBodyFields.notes,
     terms: invoiceBodyFields.terms,
     internalNotes: invoiceBodyFields.internalNotes,
+    quotationId: invoiceBodyFields.quotationId,
     status: invoiceBodyFields.status,
     items: invoiceBodyFields.items
   })
@@ -158,6 +162,7 @@ export const updateInvoiceSchema = z.object({
       currency: invoiceBodyFields.currency,
       placeOfSupply: invoiceBodyFields.placeOfSupply,
       isReverseCharge: invoiceBodyFields.isReverseCharge,
+      extraCharges: invoiceBodyFields.extraCharges,
       notes: invoiceBodyFields.notes,
       terms: invoiceBodyFields.terms,
       internalNotes: invoiceBodyFields.internalNotes,
