@@ -22,13 +22,14 @@ app.use(
   })
 );
 
-// Rate limiting. Configurable so an automated test run or a busy office behind
-// one NAT address is not mistaken for abuse; the defaults are unchanged.
+// Rate limiting. Configurable so an automated test run, dev workflow, or a busy office behind
+// one NAT address is not mistaken for abuse.
 const limiter = rateLimit({
   windowMs: config.rateLimit.windowMs,
-  max: config.rateLimit.max,
+  max: config.isDev ? 10000 : config.rateLimit.max,
   standardHeaders: true,
   legacyHeaders: false,
+  skip: () => config.isDev,
   message: {
     success: false,
     message: `Too many requests from this IP, please try again after ${Math.round(

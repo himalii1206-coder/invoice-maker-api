@@ -15,7 +15,7 @@ const envSchema = z.object({
   APP_URL: z.string().default('http://localhost:3000'),
   TWO_FACTOR_ISSUER: z.string().default('Invoice Maker'),
   RATE_LIMIT_WINDOW_MINUTES: z.coerce.number().default(15),
-  RATE_LIMIT_MAX_REQUESTS: z.coerce.number().default(100),
+  RATE_LIMIT_MAX_REQUESTS: z.coerce.number().default(2500),
   SMTP_HOST: z.string().optional(),
   SMTP_PORT: z.coerce.number().default(587),
   SMTP_USER: z.string().optional(),
