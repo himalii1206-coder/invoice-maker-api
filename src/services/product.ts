@@ -104,7 +104,10 @@ export class ProductService {
       prisma.product.findMany({
         where,
         select: productSelect,
-        orderBy: { [sortBy]: sortOrder },
+        orderBy:
+          sortBy === 'createdAt'
+            ? [{ createdAt: sortOrder }]
+            : [{ [sortBy]: sortOrder }, { createdAt: 'desc' }],
         skip,
         take: limit
       }),
@@ -202,18 +205,13 @@ export class ProductService {
     if (input.customerId) {
       await this.assertCustomerBelongsToCompany(companyId, input.customerId);
     }
-    const code = input.productCode || input.sku;
-    if (code) {
-      await this.assertCodeIsFree(companyId, code, id);
-    }
-
     if ('hsnSacCode' in input) {
       const settings = await InvoiceSettingsService.getOrCreate(companyId);
       this.assertHsnPresent(settings, input.hsnSacCode);
     }
 
     // Only touch keys the caller actually sent, so a partial update never wipes
-    // fields it did not mention.
+    // fields it did not mention. Product code / SKU is immutable once created.
     const data: Prisma.ProductUpdateInput = {};
     const assign = <K extends keyof UpdateProductInput>(key: K) => {
       if (key in input) {
@@ -224,10 +222,8 @@ export class ProductService {
     (
       [
         'category',
-        'productCode',
         'name',
         'description',
-        'sku',
         'price',
         'unit',
         'taxRate',
@@ -235,13 +231,6 @@ export class ProductService {
         'isActive'
       ] as const
     ).forEach(assign);
-
-    if (input.productCode && !input.sku) {
-      data.sku = input.productCode;
-    }
-    if (input.sku && !input.productCode) {
-      data.productCode = input.sku;
-    }
 
     // These columns are non-nullable in the schema; drop them if cleared.
     if (data.name === null) delete (data as any).name;

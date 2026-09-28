@@ -278,6 +278,28 @@ export class NumberingService {
     return cleanPrefix ? `${cleanPrefix}-${padded}` : padded;
   }
 
+  /**
+   * Previews the next directory code without advancing the counter.
+   */
+  static async previewEntityCode(
+    companyId: string,
+    documentType: Extract<DocumentType, 'CUSTOMER' | 'PRODUCT'>,
+    prefix: string,
+    padding = 4
+  ): Promise<string> {
+    const cleanPrefix = (prefix || '').trim().toUpperCase();
+    const sequence = await prisma.documentSequence.findUnique({
+      where: {
+        companyId_documentType_periodKey: { companyId, documentType, periodKey: 'ALL' }
+      },
+      select: { nextNumber: true }
+    });
+    const sequenceNo = sequence?.nextNumber ?? 1;
+    const padded = String(sequenceNo).padStart(Math.min(Math.max(padding, 1), 10), '0');
+
+    return cleanPrefix ? `${cleanPrefix}-${padded}` : padded;
+  }
+
   /** Digits at the tail of a manual number, used to keep the counter aligned. */
   static extractSequenceNo = (number: string): number => {
     const match = number.match(/(\d+)\s*$/);

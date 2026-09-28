@@ -272,6 +272,7 @@ export class PurchaseBillService {
       input.placeOfSupply || vendorSnapshot.vendorState || company.state
     );
     const isIgst = input.isIgst !== undefined ? input.isIgst : supply.isIgst;
+    const isReverseCharge = Boolean(input.isReverseCharge);
 
     // Compute lines & document totals with tax engine
     const doc = computeDocument(
@@ -281,12 +282,12 @@ export class PurchaseBillService {
         discountPercent: i.discountPercent ?? 0,
         taxRate: i.taxRate ?? 0
       })),
-      { isIgst, enableRoundOff: true }
+      { isIgst, enableRoundOff: true, isReverseCharge }
     );
 
     const otherCharges = round2(input.otherCharges ?? 0);
     const roundOff = round2(input.roundOff !== undefined ? input.roundOff : doc.roundOff);
-    const grandTotal = round2(doc.taxableAmount + doc.taxAmount + otherCharges + roundOff);
+    const grandTotal = round2(doc.taxableAmount + (isReverseCharge ? 0 : doc.taxAmount) + otherCharges + roundOff);
 
     // Numbering: generate internal PB voucher number if not provided
     let billNumber = input.billNumber?.trim();
@@ -468,7 +469,10 @@ export class PurchaseBillService {
         select: purchaseBillSelect,
         skip,
         take: limit,
-        orderBy: { [sortBy]: sortOrder }
+        orderBy:
+          sortBy === 'createdAt'
+            ? [{ createdAt: sortOrder }]
+            : [{ [sortBy]: sortOrder }, { createdAt: 'desc' }]
       })
     ]);
 
@@ -493,6 +497,7 @@ export class PurchaseBillService {
     const fy = financialYearOf(billDate);
 
     const isIgst = input.isIgst !== undefined ? input.isIgst : existing.isIgst;
+    const isReverseCharge = input.isReverseCharge !== undefined ? input.isReverseCharge : existing.isReverseCharge;
 
     let doc = null;
     let otherCharges = toNumber(existing.otherCharges);
@@ -507,11 +512,11 @@ export class PurchaseBillService {
           discountPercent: i.discountPercent ?? 0,
           taxRate: i.taxRate ?? 0
         })),
-        { isIgst, enableRoundOff: true }
+        { isIgst, enableRoundOff: true, isReverseCharge }
       );
       otherCharges = round2(input.otherCharges !== undefined ? input.otherCharges : toNumber(existing.otherCharges));
       roundOff = round2(input.roundOff !== undefined ? input.roundOff : doc.roundOff);
-      grandTotal = round2(doc.taxableAmount + doc.taxAmount + otherCharges + roundOff);
+      grandTotal = round2(doc.taxableAmount + (isReverseCharge ? 0 : doc.taxAmount) + otherCharges + roundOff);
     }
 
     const amountPaid = toNumber(existing.amountPaid);

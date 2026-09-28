@@ -123,6 +123,8 @@ export interface TaxMode {
   gstEnabled?: boolean;
   /** True when entered prices already contain the tax. */
   pricesIncludeTax?: boolean;
+  /** True when recipient is liable to pay tax under Reverse Charge Mechanism. */
+  isReverseCharge?: boolean;
 }
 
 /** Computes a single line. Exported for previews and unit-level reuse. */
@@ -131,7 +133,7 @@ export const computeLine = (
   isIgst: boolean,
   mode: TaxMode = {}
 ): ComputedTaxLine => {
-  const { gstEnabled = true, pricesIncludeTax = false } = mode;
+  const { gstEnabled = true, pricesIncludeTax = false, isReverseCharge = false } = mode;
 
   const quantity = round3(Math.max(0, toNumber(input.quantity)));
   const enteredPrice = round2(Math.max(0, toNumber(input.unitPrice)));
@@ -191,7 +193,7 @@ export const computeLine = (
     igstRate: isIgst ? taxRate : 0,
     igstAmount: fromPaise(igstPaise),
     taxAmount: fromPaise(taxPaise),
-    total: fromPaise(taxablePaise + taxPaise)
+    total: fromPaise(taxablePaise + (isReverseCharge ? 0 : taxPaise))
   };
 };
 
@@ -203,14 +205,14 @@ export const computeLine = (
  */
 export const computeDocument = <T extends TaxLineInput>(
   lines: T[],
-  options: { isIgst: boolean; enableRoundOff?: boolean; extraCharges?: number } & TaxMode
+  options: { isIgst: boolean; enableRoundOff?: boolean; extraCharges?: number; isReverseCharge?: boolean } & TaxMode
 ): DocumentTotals<T & ComputedTaxLine> => {
-  const { isIgst, enableRoundOff = true, gstEnabled, pricesIncludeTax, extraCharges = 0 } = options;
+  const { isIgst, enableRoundOff = true, gstEnabled, pricesIncludeTax, extraCharges = 0, isReverseCharge = false } = options;
   const extraPaise = toPaise(Math.max(0, extraCharges));
 
   const computed = lines.map((line) => ({
     ...line,
-    ...computeLine(line, isIgst, { gstEnabled, pricesIncludeTax })
+    ...computeLine(line, isIgst, { gstEnabled, pricesIncludeTax, isReverseCharge })
   }));
 
   // Totals sum the rounded line values, never the raw products.
@@ -235,7 +237,7 @@ export const computeDocument = <T extends TaxLineInput>(
     }
   );
 
-  const beforeRoundOff = totals.taxableAmount + totals.taxAmount + extraPaise;
+  const beforeRoundOff = totals.taxableAmount + (isReverseCharge ? 0 : totals.taxAmount) + extraPaise;
   const { total: roundedTotal, adjustment } = enableRoundOff
     ? roundOffToRupee(beforeRoundOff)
     : { total: beforeRoundOff, adjustment: 0 };

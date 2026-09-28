@@ -122,7 +122,10 @@ export class CustomerService {
       prisma.customer.findMany({
         where,
         select: customerSelect,
-        orderBy: { [sortBy]: sortOrder },
+        orderBy:
+          sortBy === 'createdAt'
+            ? [{ createdAt: sortOrder }]
+            : [{ [sortBy]: sortOrder }, { createdAt: 'desc' }],
         skip,
         take: limit
       }),

@@ -514,10 +514,12 @@ export class InvoiceService {
     const where = this.buildWhere(companyId, query);
     const skip = (query.page - 1) * query.limit;
 
-    const orderBy: Prisma.InvoiceOrderByWithRelationInput =
+    const orderBy: Prisma.InvoiceOrderByWithRelationInput[] =
       query.sortBy === 'billingName'
-        ? { billingName: query.sortOrder }
-        : { [query.sortBy]: query.sortOrder };
+        ? [{ billingName: query.sortOrder }, { createdAt: 'desc' }]
+        : query.sortBy === 'createdAt'
+        ? [{ createdAt: query.sortOrder }]
+        : [{ [query.sortBy]: query.sortOrder }, { createdAt: 'desc' }, { sequenceNo: 'desc' }];
 
     const [invoices, total, totals] = await prisma.$transaction([
       prisma.invoice.findMany({
@@ -891,12 +893,14 @@ export class InvoiceService {
 
     const extraCharges = round2(input.extraCharges ?? 0);
     const supply = resolveSupply(company.state, customer.state, input.placeOfSupply);
+    const isReverseCharge = Boolean(input.isReverseCharge);
     const computed = computeDocument(this.normaliseItems(input.items), {
       isIgst: supply.isIgst,
       enableRoundOff: settings.enableRoundOff,
       gstEnabled: settings.gstEnabled,
       pricesIncludeTax: settings.pricesIncludeTax,
-      extraCharges
+      extraCharges,
+      isReverseCharge
     });
 
     const status = input.status === InvoiceStatus.SENT ? InvoiceStatus.SENT : InvoiceStatus.DRAFT;
@@ -1075,6 +1079,8 @@ export class InvoiceService {
         debitNoteTotal: true,
         currency: true,
         placeOfSupply: true,
+        isIgst: true,
+        isReverseCharge: true,
         extraCharges: true
       }
     });
@@ -1157,6 +1163,9 @@ export class InvoiceService {
       data.placeOfSupplyCode = supply.placeOfSupplyCode;
       data.isIgst = supply.isIgst;
 
+      const isReverseCharge =
+        input.isReverseCharge !== undefined ? input.isReverseCharge : existing.isReverseCharge;
+
       if (input.items) {
         if (!input.items.length) {
           throw AppError.badRequest('An invoice needs at least one line item');
@@ -1167,7 +1176,8 @@ export class InvoiceService {
           enableRoundOff: settings.enableRoundOff,
           gstEnabled: settings.gstEnabled,
           pricesIncludeTax: settings.pricesIncludeTax,
-          extraCharges
+          extraCharges,
+          isReverseCharge
         });
 
         Object.assign(data, {
@@ -1216,9 +1226,9 @@ export class InvoiceService {
             total: line.total
           }))
         };
-      } else if (data.isIgst !== undefined) {
-        // The CGST/SGST vs IGST split changed without the lines changing, so
-        // the existing lines have to be re-split at the same rates.
+      } else if (data.isIgst !== undefined || data.isReverseCharge !== undefined) {
+        // The CGST/SGST vs IGST split or RCM flag changed without the lines changing, so
+        // the existing lines have to be recomputed.
         await this.resplitExistingItems(
           id,
           supply.isIgst,
@@ -1226,7 +1236,8 @@ export class InvoiceService {
             enableRoundOff: settings.enableRoundOff,
             gstEnabled: settings.gstEnabled,
             pricesIncludeTax: settings.pricesIncludeTax,
-            extraCharges
+            extraCharges,
+            isReverseCharge
           },
           data
         );
@@ -1258,12 +1269,18 @@ export class InvoiceService {
 
   /**
    * Recomputes the CGST/SGST/IGST split on stored lines when only the place of
-   * supply changed. Amounts stay identical - the split does not.
+   * supply or RCM changed.
    */
   private static async resplitExistingItems(
     invoiceId: string,
     isIgst: boolean,
-    taxOptions: { enableRoundOff: boolean; gstEnabled: boolean; pricesIncludeTax: boolean; extraCharges?: number },
+    taxOptions: {
+      enableRoundOff: boolean;
+      gstEnabled: boolean;
+      pricesIncludeTax: boolean;
+      extraCharges?: number;
+      isReverseCharge?: boolean;
+    },
     data: Prisma.InvoiceUpdateInput
   ): Promise<void> {
     const items = await prisma.invoiceItem.findMany({

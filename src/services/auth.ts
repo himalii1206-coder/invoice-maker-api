@@ -11,9 +11,10 @@ import {
 import { AppError } from '../utils/error.js';
 import { AccountSecurityService } from './accountSecurity.js';
 import { permissionsFor } from '../middleware/permissions.js';
-import { MemberStatus, UserRole } from '@prisma/client';
+import { MemberStatus, UserRole, DocumentType } from '@prisma/client';
 import { resolveState } from '../constants/gst.js';
 import { encryptField, decryptObject } from '../utils/encryption.js';
+import { NumberingService } from './numbering.js';
 
 export interface RegisterInput {
   email: string;
@@ -476,9 +477,28 @@ export class AuthService {
     }
 
     if (user.company) {
+      let nextProductCode: string | undefined;
+      try {
+        nextProductCode = await NumberingService.previewEntityCode(
+          user.company.id,
+          DocumentType.PRODUCT,
+          user.company.invoiceSettings?.productCodePrefix || 'PRD'
+        );
+      } catch {}
+
+      const decryptedCompany = decryptObject(user.company, ['gstin', 'pan', 'accountNumber', 'upiId']);
       user = {
         ...user,
-        company: decryptObject(user.company, ['gstin', 'pan', 'accountNumber', 'upiId'])
+        company: {
+          ...decryptedCompany,
+          ...(nextProductCode && { nextProductCode }),
+          ...(decryptedCompany.invoiceSettings && {
+            invoiceSettings: {
+              ...decryptedCompany.invoiceSettings,
+              ...(nextProductCode && { nextProductCode })
+            }
+          })
+        }
       };
     }
 

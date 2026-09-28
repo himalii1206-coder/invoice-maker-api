@@ -209,7 +209,10 @@ export class CreditDebitNoteService {
       prisma.creditDebitNote.findMany({
         where,
         select: noteListSelect,
-        orderBy: { [query.sortBy]: query.sortOrder },
+        orderBy:
+          query.sortBy === 'createdAt'
+            ? [{ createdAt: query.sortOrder }]
+            : [{ [query.sortBy]: query.sortOrder }, { createdAt: 'desc' }],
         skip,
         take: query.limit
       }),

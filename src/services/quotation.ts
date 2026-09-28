@@ -646,7 +646,10 @@ export class QuotationService {
         where,
         skip,
         take: limit,
-        orderBy: { [sortBy]: sortOrder },
+        orderBy:
+          sortBy === 'createdAt'
+            ? [{ createdAt: sortOrder }]
+            : [{ [sortBy]: sortOrder }, { createdAt: 'desc' }],
         include: {
           customer: {
             select: { id: true, name: true, email: true, phone: true }

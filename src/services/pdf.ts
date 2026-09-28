@@ -268,6 +268,10 @@ export class PdfService {
         doc.font(FONT.bold).fontSize(7.5).fillColor(COLORS.textDark);
         doc.text(`GSTIN: ${custGstin || 'URP'}`, c1X, y + detailsBoxHeight - 21);
         doc.text(`State Code: ${custStateCode}`, c1X, y + detailsBoxHeight - 11);
+        if (invoice.isReverseCharge) {
+          doc.font(FONT.bold).fontSize(7.5).fillColor(COLORS.primaryBlue);
+          doc.text(`Reverse Charge: Yes`, c1X + 85, y + detailsBoxHeight - 11);
+        }
 
         // Columns 2 & 3: Table Grid with horizontal row dividers
         const numRows = 5;
@@ -563,7 +567,9 @@ export class PdfService {
         const termsBoxH = 63;
         doc.font(FONT.bold).fontSize(7.5).fillColor(COLORS.textDark).text('Terms & Conditions:', flX, termsBoxY + 3.5);
 
-        const termsText = invoice.terms || settings.defaultTerms || '1. Goods once sold will not be taken back.\n2. Subject to local jurisdiction.';
+        const defaultTermsText = settings.defaultTerms || '1. Goods once sold will not be taken back.\n2. Subject to local jurisdiction.';
+        const rcmNote = invoice.isReverseCharge ? '\n* Tax is payable on Reverse Charge by recipient.' : '';
+        const termsText = (invoice.terms || defaultTermsText) + rcmNote;
         doc.font(FONT.regular).fontSize(6.5).fillColor(COLORS.textMuted).text(termsText, flX, termsBoxY + 13.5, {
           width: footLeftInnerWidth,
           lineBreak: true
@@ -614,20 +620,38 @@ export class PdfService {
           });
         }
 
-        if (invoice.isIgst) {
-          totalRows.push({
-            label: `IGST (${baseTaxRate}%):`,
-            value: formatPdfMoney(igstAmount)
-          });
+        if (invoice.isReverseCharge) {
+          if (invoice.isIgst) {
+            totalRows.push({
+              label: `IGST (${baseTaxRate}%) [RCM]*:`,
+              value: formatPdfMoney(igstAmount)
+            });
+          } else {
+            totalRows.push({
+              label: `CGST (${halfRate}%) [RCM]*:`,
+              value: formatPdfMoney(cgstAmount)
+            });
+            totalRows.push({
+              label: `SGST (${halfRate}%) [RCM]*:`,
+              value: formatPdfMoney(sgstAmount)
+            });
+          }
         } else {
-          totalRows.push({
-            label: `CGST (${halfRate}%):`,
-            value: formatPdfMoney(cgstAmount)
-          });
-          totalRows.push({
-            label: `SGST (${halfRate}%):`,
-            value: formatPdfMoney(sgstAmount)
-          });
+          if (invoice.isIgst) {
+            totalRows.push({
+              label: `IGST (${baseTaxRate}%):`,
+              value: formatPdfMoney(igstAmount)
+            });
+          } else {
+            totalRows.push({
+              label: `CGST (${halfRate}%):`,
+              value: formatPdfMoney(cgstAmount)
+            });
+            totalRows.push({
+              label: `SGST (${halfRate}%):`,
+              value: formatPdfMoney(sgstAmount)
+            });
+          }
         }
 
         if (extraCharges > 0) {

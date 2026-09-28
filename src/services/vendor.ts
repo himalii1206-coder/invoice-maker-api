@@ -181,7 +181,10 @@ export class VendorService {
         },
         skip,
         take: limit,
-        orderBy: { [sortBy]: sortOrder }
+        orderBy:
+          sortBy === 'createdAt'
+            ? [{ createdAt: sortOrder }]
+            : [{ [sortBy]: sortOrder }, { createdAt: 'desc' }]
       })
     ]);
 
