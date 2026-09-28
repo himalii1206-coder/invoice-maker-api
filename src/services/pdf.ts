@@ -77,10 +77,9 @@ const formatIndianNumber = (num: number): string => {
   return `${num < 0 ? '-' : ''}${formattedInt}.${decPart}`;
 };
 
-const formatPdfMoney = (amount: unknown, showSymbol = false): string => {
+const formatPdfMoney = (amount: unknown): string => {
   const num = toNumber(amount as string | number | null | undefined);
-  const formatted = formatIndianNumber(num);
-  return showSymbol ? `₹ ${formatted}` : formatted;
+  return formatIndianNumber(num);
 };
 
 const sanitizeFilename = (name: string): string => {
@@ -605,43 +604,43 @@ export class PdfService {
         const halfRate = baseTaxRate / 2;
 
         const totalRows: Array<{ label: string; value: string }> = [
-          { label: 'Total', value: formatPdfMoney(subtotal, true) }
+          { label: 'Total', value: formatPdfMoney(subtotal) }
         ];
 
         if (discountAmount > 0) {
           totalRows.push({
             label: 'Discount:',
-            value: `- ${formatPdfMoney(discountAmount, true)}`
+            value: `- ${formatPdfMoney(discountAmount)}`
           });
         }
 
         if (invoice.isIgst) {
           totalRows.push({
             label: `IGST (${baseTaxRate}%):`,
-            value: formatPdfMoney(igstAmount, true)
+            value: formatPdfMoney(igstAmount)
           });
         } else {
           totalRows.push({
             label: `CGST (${halfRate}%):`,
-            value: formatPdfMoney(cgstAmount, true)
+            value: formatPdfMoney(cgstAmount)
           });
           totalRows.push({
             label: `SGST (${halfRate}%):`,
-            value: formatPdfMoney(sgstAmount, true)
+            value: formatPdfMoney(sgstAmount)
           });
         }
 
         if (extraCharges > 0) {
           totalRows.push({
             label: 'Extra Charges:',
-            value: formatPdfMoney(extraCharges, true)
+            value: formatPdfMoney(extraCharges)
           });
         }
 
         if (roundOff !== 0) {
           totalRows.push({
             label: 'Round Off:',
-            value: formatPdfMoney(roundOff, true)
+            value: formatPdfMoney(roundOff)
           });
         }
 
@@ -673,7 +672,7 @@ export class PdfService {
 
         doc.font(FONT.bold).fontSize(8.5).fillColor(COLORS.white);
         doc.text('Grand Total:', frX, rightRowY + 5.5, { width: frWidth * 0.5 });
-        doc.text(formatPdfMoney(grandTotal, true), frX, rightRowY + 5.5, {
+        doc.text(formatPdfMoney(grandTotal), frX, rightRowY + 5.5, {
           width: frWidth,
           align: 'right'
         });

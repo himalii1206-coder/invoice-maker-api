@@ -7,8 +7,6 @@ import { QuotationService } from './quotation.js';
 import { InvoiceService } from './invoice.js';
 import { InvoiceSettingsService, InvoiceSettingsRecord } from './invoiceSettings.js';
 import { amountInWords, toNumber } from '../utils/money.js';
-import { resolveState } from '../constants/gst.js';
-import { AppError } from '../utils/error.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -71,10 +69,9 @@ const formatIndianNumber = (num: number): string => {
   return `${num < 0 ? '-' : ''}${formattedInt}.${decPart}`;
 };
 
-const formatPdfMoney = (amount: unknown, showSymbol = false): string => {
+const formatPdfMoney = (amount: unknown): string => {
   const num = toNumber(amount as string | number | null | undefined);
-  const formatted = formatIndianNumber(num);
-  return showSymbol ? `₹ ${formatted}` : formatted;
+  return formatIndianNumber(num);
 };
 
 const sanitizeFilename = (name: string): string => {
@@ -295,15 +292,31 @@ export class QuotationPdfService {
 
         // 4. Line Items Table
         const tableY = y;
-        const COL = {
-          sr: { x: MARGIN.left, width: 26 },
-          desc: { x: MARGIN.left + 26, width: 225 },
-          hsn: { x: MARGIN.left + 251, width: 55 },
-          qty: { x: MARGIN.left + 306, width: 45 },
-          unit: { x: MARGIN.left + 351, width: 38 },
-          rate: { x: MARGIN.left + 389, width: 65 },
-          amount: { x: MARGIN.left + 454, width: 85 }
-        };
+        const hasDiscount =
+          quotation.items.some((it: any) => toNumber(it.discountPercent) > 0 || toNumber(it.discountAmount) > 0) ||
+          toNumber(quotation.discountAmount) > 0;
+
+        const COL = hasDiscount
+          ? {
+              sr: { x: MARGIN.left, width: 24 },
+              desc: { x: MARGIN.left + 24, width: 184 },
+              hsn: { x: MARGIN.left + 208, width: 52 },
+              qty: { x: MARGIN.left + 260, width: 44 },
+              unit: { x: MARGIN.left + 304, width: 36 },
+              rate: { x: MARGIN.left + 340, width: 62 },
+              disc: { x: MARGIN.left + 402, width: 48 },
+              amount: { x: MARGIN.left + 450, width: 89.28 }
+            }
+          : {
+              sr: { x: MARGIN.left, width: 26 },
+              desc: { x: MARGIN.left + 26, width: 225 },
+              hsn: { x: MARGIN.left + 251, width: 55 },
+              qty: { x: MARGIN.left + 306, width: 45 },
+              unit: { x: MARGIN.left + 351, width: 38 },
+              rate: { x: MARGIN.left + 389, width: 65 },
+              disc: null as null | { x: number; width: number },
+              amount: { x: MARGIN.left + 454, width: 85.28 }
+            };
 
         const tableHeaderHeight = 20;
 
@@ -326,8 +339,11 @@ export class QuotationPdfService {
         doc.text('HSN/SAC', COL.hsn.x, tableY + 5, { width: COL.hsn.width, align: 'center' });
         doc.text('QTY', COL.qty.x, tableY + 5, { width: COL.qty.width, align: 'right' });
         doc.text('UNIT', COL.unit.x, tableY + 5, { width: COL.unit.width, align: 'center' });
-        doc.text('RATE (₹)', COL.rate.x, tableY + 5, { width: COL.rate.width, align: 'right' });
-        doc.text('AMOUNT (₹)', COL.amount.x, tableY + 5, { width: COL.amount.width - 5, align: 'right' });
+        doc.text('RATE', COL.rate.x, tableY + 5, { width: COL.rate.width, align: 'right' });
+        if (COL.disc) {
+          doc.text('DISC %', COL.disc.x, tableY + 5, { width: COL.disc.width, align: 'right' });
+        }
+        doc.text('AMOUNT', COL.amount.x, tableY + 5, { width: COL.amount.width - 5, align: 'right' });
 
         let currentY = tableY + tableHeaderHeight;
         const rowHeight = 22;
@@ -338,6 +354,16 @@ export class QuotationPdfService {
             .strokeColor(COLORS.borderLight)
             .lineWidth(0.5)
             .stroke();
+
+          const discPct = toNumber(item.discountPercent);
+          const taxable =
+            toNumber(item.taxableAmount) ||
+            Math.max(
+              0,
+              toNumber(item.quantity) * toNumber(item.rate) -
+                (toNumber(item.discountAmount) ||
+                  (discPct > 0 ? (toNumber(item.quantity) * toNumber(item.rate) * discPct) / 100 : 0))
+            );
 
           doc.font(FONT.regular).fontSize(8.5).fillColor(COLORS.textDark);
           doc.text(String(idx + 1), COL.sr.x, currentY + 5, { width: COL.sr.width, align: 'center' });
@@ -352,7 +378,13 @@ export class QuotationPdfService {
             width: COL.rate.width,
             align: 'right'
           });
-          doc.font(FONT.medium).text(formatPdfMoney(item.subtotal || item.amount), COL.amount.x, currentY + 5, {
+          if (COL.disc) {
+            doc.text(discPct > 0 ? `${discPct}%` : '—', COL.disc.x, currentY + 5, {
+              width: COL.disc.width,
+              align: 'right'
+            });
+          }
+          doc.font(FONT.medium).text(formatPdfMoney(taxable), COL.amount.x, currentY + 5, {
             width: COL.amount.width - 5,
             align: 'right'
           });
@@ -386,30 +418,30 @@ export class QuotationPdfService {
           tY += 15;
         };
 
-        drawTotalRow('Subtotal / Total:', `₹ ${formatPdfMoney(quotation.subtotal)}`);
+        drawTotalRow('Subtotal / Total:', formatPdfMoney(quotation.subtotal));
         if (toNumber(quotation.discountAmount) > 0) {
-          drawTotalRow('Discount:', `- ₹ ${formatPdfMoney(quotation.discountAmount)}`);
+          drawTotalRow('Discount:', `- ${formatPdfMoney(quotation.discountAmount)}`);
         }
         if (quotation.isIgst) {
-          drawTotalRow('IGST:', `₹ ${formatPdfMoney(quotation.igstAmount)}`);
+          drawTotalRow('IGST:', formatPdfMoney(quotation.igstAmount));
         } else {
-          drawTotalRow('CGST:', `₹ ${formatPdfMoney(quotation.cgstAmount)}`);
-          drawTotalRow('SGST:', `₹ ${formatPdfMoney(quotation.sgstAmount)}`);
+          drawTotalRow('CGST:', formatPdfMoney(quotation.cgstAmount));
+          drawTotalRow('SGST:', formatPdfMoney(quotation.sgstAmount));
         }
 
         if (toNumber(quotation.forwardingPackagingAmount) > 0) {
-          drawTotalRow('Forwarding & Pkg:', `₹ ${formatPdfMoney(quotation.forwardingPackagingAmount)}`);
+          drawTotalRow('Forwarding & Pkg:', formatPdfMoney(quotation.forwardingPackagingAmount));
         }
 
         if (toNumber(quotation.secondTotal) > 0 && toNumber(quotation.secondTotal) !== toNumber(quotation.grandTotal)) {
-          drawTotalRow('Second Total:', `₹ ${formatPdfMoney(quotation.secondTotal)}`);
+          drawTotalRow('Second Total:', formatPdfMoney(quotation.secondTotal));
         }
 
         if (toNumber(quotation.roundOff) !== 0) {
-          drawTotalRow('Round Off:', `₹ ${formatPdfMoney(quotation.roundOff)}`);
+          drawTotalRow('Round Off:', formatPdfMoney(quotation.roundOff));
         }
 
-        drawTotalRow('GRAND TOTAL:', `₹ ${formatPdfMoney(quotation.grandTotal)}`, true, true);
+        drawTotalRow('GRAND TOTAL:', formatPdfMoney(quotation.grandTotal), true, true);
 
         // Left Side of Summary: Amount in words & Notes / Terms
         let notesY = totalsY;
