@@ -114,35 +114,64 @@ export class VendorService {
   }
 
   static async findById(companyId: string, vendorId: string) {
-    const vendor = await prisma.vendor.findFirst({
-      where: { id: vendorId, companyId },
-      select: {
-        ...vendorSelect,
-        purchaseBills: {
-          take: 5,
-          orderBy: { billDate: 'desc' },
-          select: {
-            id: true,
-            billNumber: true,
-            vendorInvoiceNumber: true,
-            billDate: true,
-            dueDate: true,
-            grandTotal: true,
-            balanceDue: true,
-            status: true
+    const [vendor, billBalanceAgg] = await Promise.all([
+      prisma.vendor.findFirst({
+        where: { id: vendorId, companyId },
+        select: {
+          ...vendorSelect,
+          purchaseBills: {
+            take: 5,
+            orderBy: { billDate: 'desc' },
+            select: {
+              id: true,
+              billNumber: true,
+              vendorInvoiceNumber: true,
+              billDate: true,
+              dueDate: true,
+              grandTotal: true,
+              balanceDue: true,
+              status: true
+            }
+          },
+          _count: {
+            select: { purchaseBills: true }
           }
-        },
-        _count: {
-          select: { purchaseBills: true }
         }
-      }
-    });
+      }),
+      prisma.purchaseBill.aggregate({
+        where: {
+          companyId,
+          vendorId,
+          status: { not: 'CANCELLED' }
+        },
+        _sum: {
+          balanceDue: true
+        }
+      })
+    ]);
 
     if (!vendor) {
       throw AppError.notFound('Vendor not found');
     }
 
-    return decryptObject(vendor, ['gstin', 'pan', 'accountNumber']);
+    const decrypted = decryptObject(vendor, ['gstin', 'pan', 'accountNumber']);
+    const billBal = billBalanceAgg._sum?.balanceDue ? Number(billBalanceAgg._sum.balanceDue) : 0;
+    const openingBal = decrypted.openingBalance ? Number(decrypted.openingBalance) : 0;
+    const isDebit = decrypted.balanceType && (
+      decrypted.balanceType.toUpperCase().startsWith('DR') ||
+      decrypted.balanceType.toLowerCase() === 'debit' ||
+      decrypted.balanceType.toLowerCase() === 'receivable'
+    );
+    const rawBalance = isDebit ? (billBal - openingBal) : (billBal + openingBal);
+    const currentBalance = Math.abs(rawBalance);
+    const currentBalanceType = rawBalance >= 0 ? 'Payable' : 'Receivable';
+
+    return {
+      ...decrypted,
+      currentBalance,
+      currentBalanceType,
+      rawBalance
+    };
   }
 
   static async list(companyId: string, query: ListVendorsQuery) {
@@ -199,7 +228,50 @@ export class VendorService {
       hasPrevPage: page > 1
     };
 
-    const decryptedVendors = vendors.map((v) => decryptObject(v, ['gstin', 'pan', 'accountNumber']));
+    const vendorIds = vendors.map((v) => v.id);
+
+    const billAggregates = vendorIds.length > 0
+      ? await prisma.purchaseBill.groupBy({
+          by: ['vendorId'],
+          where: {
+            companyId,
+            vendorId: { in: vendorIds },
+            status: { not: 'CANCELLED' }
+          },
+          _sum: {
+            balanceDue: true
+          }
+        })
+      : [];
+
+    const billBalanceMap = new Map<string, number>();
+    for (const item of billAggregates) {
+      if (item.vendorId) {
+        billBalanceMap.set(item.vendorId, item._sum?.balanceDue ? Number(item._sum.balanceDue) : 0);
+      }
+    }
+
+    const decryptedVendors = vendors.map((v) => {
+      const decrypted = decryptObject(v, ['gstin', 'pan', 'accountNumber']);
+      const billBal = billBalanceMap.get(decrypted.id) ?? 0;
+      const openingBal = decrypted.openingBalance ? Number(decrypted.openingBalance) : 0;
+      const isDebit = decrypted.balanceType && (
+        decrypted.balanceType.toUpperCase().startsWith('DR') ||
+        decrypted.balanceType.toLowerCase() === 'debit' ||
+        decrypted.balanceType.toLowerCase() === 'receivable'
+      );
+      
+      const rawBalance = isDebit ? (billBal - openingBal) : (billBal + openingBal);
+      const currentBalance = Math.abs(rawBalance);
+      const currentBalanceType = rawBalance >= 0 ? 'Payable' : 'Receivable';
+
+      return {
+        ...decrypted,
+        currentBalance,
+        currentBalanceType,
+        rawBalance
+      };
+    });
 
     return { vendors: decryptedVendors, meta };
   }

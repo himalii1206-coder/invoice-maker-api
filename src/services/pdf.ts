@@ -242,35 +242,68 @@ export class PdfService {
           .strokeColor(COLORS.border)
           .stroke();
 
-        // Column 1: Bill To
+        // Column 1: Bill To / Ship To
         const c1X = MARGIN.left + 6;
         let c1Y = y + 5;
-        doc.font(FONT.bold).fontSize(7.5).fillColor(COLORS.primaryBlue).text('TO.', c1X, c1Y);
-        c1Y += 10;
 
-        doc.font(FONT.bold).fontSize(8).fillColor(COLORS.textDark).text(invoice.billingName || '—', c1X, c1Y, {
-          width: col1Width - 12,
-          lineBreak: true
-        });
-        c1Y = doc.y + 1.5;
+        const hasDifferentConsignee = Boolean(
+          invoice.shippingName &&
+          (invoice.shippingName !== invoice.billingName ||
+           invoice.shippingAddress !== invoice.billingAddress ||
+           invoice.shippingGstin !== invoice.billingGstin)
+        );
 
-        const addressParts = [
-          invoice.billingAddress,
-          [invoice.billingCity, invoice.billingState, invoice.billingPostalCode].filter(Boolean).join(', ')
-        ].filter(Boolean);
+        if (hasDifferentConsignee) {
+          doc.font(FONT.bold).fontSize(6.5).fillColor(COLORS.primaryBlue).text('BILL TO:', c1X, c1Y);
+          c1Y += 7.5;
+          doc.font(FONT.bold).fontSize(7.5).fillColor(COLORS.textDark).text(invoice.billingName || '—', c1X, c1Y, { width: col1Width - 12, lineBreak: false });
+          c1Y += 8.5;
+          const bAddr = [invoice.billingAddress, invoice.billingCity, invoice.billingState].filter(Boolean).join(', ');
+          if (bAddr) {
+            doc.font(FONT.regular).fontSize(6.5).fillColor(COLORS.textBody).text(bAddr, c1X, c1Y, { width: col1Width - 12, lineBreak: false });
+            c1Y += 7.5;
+          }
+          doc.font(FONT.bold).fontSize(6.5).fillColor(COLORS.textDark).text(`GSTIN: ${custGstin || 'URP'}`, c1X, c1Y);
+          c1Y += 9;
 
-        doc.font(FONT.regular).fontSize(7).fillColor(COLORS.textBody);
-        for (const addr of addressParts) {
-          doc.text(addr as string, c1X, c1Y, { width: col1Width - 12, lineBreak: true });
-          c1Y = doc.y + 1;
-        }
+          doc.font(FONT.bold).fontSize(6.5).fillColor(COLORS.primaryBlue).text('SHIP TO (CONSIGNEE):', c1X, c1Y);
+          c1Y += 7.5;
+          doc.font(FONT.bold).fontSize(7.5).fillColor(COLORS.textDark).text(invoice.shippingName || '—', c1X, c1Y, { width: col1Width - 12, lineBreak: false });
+          c1Y += 8.5;
+          const sAddr = [invoice.shippingAddress, invoice.shippingCity, invoice.shippingState].filter(Boolean).join(', ');
+          if (sAddr) {
+            doc.font(FONT.regular).fontSize(6.5).fillColor(COLORS.textBody).text(sAddr, c1X, c1Y, { width: col1Width - 12, lineBreak: false });
+            c1Y += 7.5;
+          }
+          doc.font(FONT.bold).fontSize(6.5).fillColor(COLORS.textDark).text(`GSTIN: ${invoice.shippingGstin || custGstin || 'URP'}`, c1X, c1Y);
+        } else {
+          doc.font(FONT.bold).fontSize(7.5).fillColor(COLORS.primaryBlue).text('TO.', c1X, c1Y);
+          c1Y += 10;
 
-        doc.font(FONT.bold).fontSize(7.5).fillColor(COLORS.textDark);
-        doc.text(`GSTIN: ${custGstin || 'URP'}`, c1X, y + detailsBoxHeight - 21);
-        doc.text(`State Code: ${custStateCode}`, c1X, y + detailsBoxHeight - 11);
-        if (invoice.isReverseCharge) {
-          doc.font(FONT.bold).fontSize(7.5).fillColor(COLORS.primaryBlue);
-          doc.text(`Reverse Charge: Yes`, c1X + 85, y + detailsBoxHeight - 11);
+          doc.font(FONT.bold).fontSize(8).fillColor(COLORS.textDark).text(invoice.billingName || '—', c1X, c1Y, {
+            width: col1Width - 12,
+            lineBreak: true
+          });
+          c1Y = doc.y + 1.5;
+
+          const addressParts = [
+            invoice.billingAddress,
+            [invoice.billingCity, invoice.billingState, invoice.billingPostalCode].filter(Boolean).join(', ')
+          ].filter(Boolean);
+
+          doc.font(FONT.regular).fontSize(7).fillColor(COLORS.textBody);
+          for (const addr of addressParts) {
+            doc.text(addr as string, c1X, c1Y, { width: col1Width - 12, lineBreak: true });
+            c1Y = doc.y + 1;
+          }
+
+          doc.font(FONT.bold).fontSize(7.5).fillColor(COLORS.textDark);
+          doc.text(`GSTIN: ${custGstin || 'URP'}`, c1X, y + detailsBoxHeight - 21);
+          doc.text(`State Code: ${custStateCode}`, c1X, y + detailsBoxHeight - 11);
+          if (invoice.isReverseCharge) {
+            doc.font(FONT.bold).fontSize(7.5).fillColor(COLORS.primaryBlue);
+            doc.text(`Reverse Charge: Yes`, c1X + 85, y + detailsBoxHeight - 11);
+          }
         }
 
         // Columns 2 & 3: Table Grid with horizontal row dividers

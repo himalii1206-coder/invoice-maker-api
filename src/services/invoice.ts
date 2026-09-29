@@ -17,8 +17,14 @@ const decryptInvoice = <T extends Record<string, any>>(inv: T): T => {
   if (result.billingGstin) {
     result.billingGstin = decryptField(result.billingGstin);
   }
+  if (result.shippingGstin) {
+    result.shippingGstin = decryptField(result.shippingGstin);
+  }
   if (result.customer) {
     result.customer = decryptObject(result.customer, ['gstin', 'accountNumber']);
+  }
+  if (result.consigneeCustomer) {
+    result.consigneeCustomer = decryptObject(result.consigneeCustomer, ['gstin', 'accountNumber']);
   }
   return result;
 };
@@ -50,6 +56,16 @@ export interface InvoiceItemInput {
 
 export interface CreateInvoiceInput {
   customerId: string;
+  consigneeCustomerId?: string | null;
+  shippingName?: string | null;
+  shippingEmail?: string | null;
+  shippingPhone?: string | null;
+  shippingGstin?: string | null;
+  shippingAddress?: string | null;
+  shippingCity?: string | null;
+  shippingState?: string | null;
+  shippingCountry?: string | null;
+  shippingPostalCode?: string | null;
   quotationId?: string | null;
   /** Optional manual override; omitted means allocate from the sequence. */
   invoiceNumber?: string;
@@ -184,6 +200,10 @@ const invoiceListSelect = {
   createdAt: true,
   updatedAt: true,
   customerId: true,
+  consigneeCustomerId: true,
+  shippingName: true,
+  shippingState: true,
+  shippingGstin: true,
   customer: { select: { id: true, name: true, type: true, email: true, isActive: true } },
   quotations: {
     select: {
@@ -206,6 +226,12 @@ const invoiceDetailSelect = {
   billingCity: true,
   billingCountry: true,
   billingPostalCode: true,
+  shippingEmail: true,
+  shippingPhone: true,
+  shippingAddress: true,
+  shippingCity: true,
+  shippingCountry: true,
+  shippingPostalCode: true,
   placeOfSupplyCode: true,
   isReverseCharge: true,
   notes: true,
@@ -214,6 +240,22 @@ const invoiceDetailSelect = {
   cancelledReason: true,
   viewedAt: true,
   sequenceNo: true,
+  consigneeCustomer: {
+    select: {
+      id: true,
+      name: true,
+      type: true,
+      email: true,
+      phone: true,
+      gstin: true,
+      address: true,
+      city: true,
+      state: true,
+      country: true,
+      postalCode: true,
+      isActive: true
+    }
+  },
   customer: {
     select: {
       id: true,
@@ -876,10 +918,13 @@ export class InvoiceService {
       throw AppError.badRequest('An invoice needs at least one line item');
     }
 
-    const [company, customer, settings] = await Promise.all([
+    const [company, customer, settings, consigneeCustomer] = await Promise.all([
       this.getCompanyProfile(companyId),
       this.getCustomer(companyId, input.customerId),
-      InvoiceSettingsService.getOrCreate(companyId)
+      InvoiceSettingsService.getOrCreate(companyId),
+      input.consigneeCustomerId
+        ? this.getCustomer(companyId, input.consigneeCustomerId).catch(() => null)
+        : null
     ]);
 
     const issueDate = startOfDay(input.issueDate ?? new Date());
@@ -915,6 +960,7 @@ export class InvoiceService {
           data: {
             companyId,
             customerId: customer.id,
+            consigneeCustomerId: consigneeCustomer?.id ?? input.consigneeCustomerId ?? null,
             invoiceNumber: numbering.number,
             sequenceNo: numbering.sequenceNo,
             financialYear: numbering.financialYear,
@@ -946,6 +992,17 @@ export class InvoiceService {
             billingState: customer.state,
             billingCountry: customer.country ?? 'India',
             billingPostalCode: customer.postalCode,
+
+            // Snapshot the consignee/shipping details
+            shippingName: input.shippingName || consigneeCustomer?.name || null,
+            shippingEmail: input.shippingEmail || consigneeCustomer?.email || null,
+            shippingPhone: input.shippingPhone || consigneeCustomer?.phone || null,
+            shippingGstin: input.shippingGstin || (consigneeCustomer ? decryptField(consigneeCustomer.gstin) : null),
+            shippingAddress: input.shippingAddress || consigneeCustomer?.address || null,
+            shippingCity: input.shippingCity || consigneeCustomer?.city || null,
+            shippingState: input.shippingState || consigneeCustomer?.state || null,
+            shippingCountry: input.shippingCountry || consigneeCustomer?.country || 'India',
+            shippingPostalCode: input.shippingPostalCode || consigneeCustomer?.postalCode || null,
 
             placeOfSupply: supply.placeOfSupply,
             placeOfSupplyCode: supply.placeOfSupplyCode,
@@ -1114,6 +1171,16 @@ export class InvoiceService {
       issueDate,
       dueDate,
       ...(input.billType !== undefined && { billType: input.billType }),
+      ...(input.consigneeCustomerId !== undefined && { consigneeCustomerId: input.consigneeCustomerId ?? null }),
+      ...(input.shippingName !== undefined && { shippingName: input.shippingName ?? null }),
+      ...(input.shippingEmail !== undefined && { shippingEmail: input.shippingEmail ?? null }),
+      ...(input.shippingPhone !== undefined && { shippingPhone: input.shippingPhone ?? null }),
+      ...(input.shippingGstin !== undefined && { shippingGstin: input.shippingGstin ?? null }),
+      ...(input.shippingAddress !== undefined && { shippingAddress: input.shippingAddress ?? null }),
+      ...(input.shippingCity !== undefined && { shippingCity: input.shippingCity ?? null }),
+      ...(input.shippingState !== undefined && { shippingState: input.shippingState ?? null }),
+      ...(input.shippingCountry !== undefined && { shippingCountry: input.shippingCountry ?? null }),
+      ...(input.shippingPostalCode !== undefined && { shippingPostalCode: input.shippingPostalCode ?? null }),
       ...('poNumber' in input && { poNumber: input.poNumber ?? null }),
       ...('orderDate' in input && { orderDate: input.orderDate ? startOfDay(input.orderDate) : null }),
       ...('challanNo' in input && { challanNo: input.challanNo ?? null }),

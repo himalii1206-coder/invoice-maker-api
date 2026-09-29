@@ -1,4 +1,4 @@
-import { Prisma, CustomerType, DocumentType, NotificationEvent } from '@prisma/client';
+import { Prisma, CustomerType, DocumentType, NotificationEvent, InvoiceStatus } from '@prisma/client';
 import { prisma } from '../config/database.js';
 import { AppError } from '../utils/error.js';
 import { PaginationMeta } from '../types/index.js';
@@ -143,7 +143,51 @@ export class CustomerService {
       hasPrevPage: page > 1
     };
 
-    const decryptedCustomers = customers.map((c) => decryptObject(c, ['gstin', 'accountNumber']));
+    const customerIds = customers.map((c) => c.id);
+
+    // Sum open invoice balance dues for each customer
+    const invoiceAggregates = customerIds.length > 0
+      ? await prisma.invoice.groupBy({
+          by: ['customerId'],
+          where: {
+            companyId,
+            customerId: { in: customerIds },
+            status: { not: InvoiceStatus.CANCELLED }
+          },
+          _sum: {
+            balanceDue: true
+          }
+        })
+      : [];
+
+    const invoiceBalanceMap = new Map<string, number>();
+    for (const item of invoiceAggregates) {
+      invoiceBalanceMap.set(item.customerId, item._sum?.balanceDue ? Number(item._sum.balanceDue) : 0);
+    }
+
+    const decryptedCustomers = customers.map((c) => {
+      const decrypted = decryptObject(c, ['gstin', 'accountNumber']);
+      const invoiceBal = invoiceBalanceMap.get(decrypted.id) ?? 0;
+      const openingBal = decrypted.openingBalance ? Number(decrypted.openingBalance) : 0;
+      const isCredit = decrypted.balanceType && (
+        decrypted.balanceType.toUpperCase().startsWith('CR') ||
+        decrypted.balanceType.toLowerCase() === 'credit' ||
+        decrypted.balanceType.toLowerCase() === 'payable'
+      );
+      
+      // Debit balance (+): Customer owes us money (Receivable)
+      // Credit balance (-): We owe customer money or customer has advance credit (Payable)
+      const rawBalance = isCredit ? (invoiceBal - openingBal) : (invoiceBal + openingBal);
+      const currentBalance = Math.abs(rawBalance);
+      const currentBalanceType = rawBalance >= 0 ? 'Receivable' : 'Payable';
+
+      return {
+        ...decrypted,
+        currentBalance,
+        currentBalanceType,
+        rawBalance
+      };
+    });
 
     return { customers: decryptedCustomers, meta };
   }
@@ -161,9 +205,38 @@ export class CustomerService {
       throw AppError.notFound('Customer not found');
     }
 
+    const invoiceBalanceAgg = await prisma.invoice.aggregate({
+      where: {
+        companyId,
+        customerId: id,
+        status: { not: InvoiceStatus.CANCELLED }
+      },
+      _sum: {
+        balanceDue: true
+      }
+    });
+
     const { _count, ...rest } = customer;
     const decryptedRest = decryptObject(rest, ['gstin', 'accountNumber']);
-    return { ...decryptedRest, invoiceCount: _count.invoices, quotationCount: _count.quotations };
+    const invoiceBal = invoiceBalanceAgg._sum?.balanceDue ? Number(invoiceBalanceAgg._sum.balanceDue) : 0;
+    const openingBal = decryptedRest.openingBalance ? Number(decryptedRest.openingBalance) : 0;
+    const isCredit = decryptedRest.balanceType && (
+      decryptedRest.balanceType.toUpperCase().startsWith('CR') ||
+      decryptedRest.balanceType.toLowerCase() === 'credit' ||
+      decryptedRest.balanceType.toLowerCase() === 'payable'
+    );
+    const rawBalance = isCredit ? (invoiceBal - openingBal) : (invoiceBal + openingBal);
+    const currentBalance = Math.abs(rawBalance);
+    const currentBalanceType = rawBalance >= 0 ? 'Receivable' : 'Payable';
+
+    return {
+      ...decryptedRest,
+      invoiceCount: _count.invoices,
+      quotationCount: _count.quotations,
+      currentBalance,
+      currentBalanceType,
+      rawBalance
+    };
   }
 
   /**

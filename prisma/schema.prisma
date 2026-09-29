@@ -147,7 +147,8 @@ model Customer {
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
   company            Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  invoices           Invoice[]
+  invoices           Invoice[]          @relation("InvoiceCustomer")
+  consigneeInvoices  Invoice[]          @relation("InvoiceConsignee")
   quotations         Quotation[]
   products           Product[]
   notes              CreditDebitNote[]
@@ -227,6 +228,18 @@ model Invoice {
   billingCountry    String  @default("India")
   billingPostalCode String?
 
+  /// Consignee / Ship To details
+  consigneeCustomerId String?
+  shippingName        String?
+  shippingEmail       String?
+  shippingPhone       String?
+  shippingGstin       String?
+  shippingAddress     String?
+  shippingCity        String?
+  shippingState       String?
+  shippingCountry     String? @default("India")
+  shippingPostalCode  String?
+
   /// Destination state for GST. Equal to the seller state => CGST+SGST, else IGST.
   placeOfSupply     String?
   placeOfSupplyCode String?
@@ -261,9 +274,10 @@ model Invoice {
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
-  items      InvoiceItem[]
-  company    Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  customer   Customer          @relation(fields: [customerId], references: [id])
+  items             InvoiceItem[]
+  company           Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  customer          Customer          @relation("InvoiceCustomer", fields: [customerId], references: [id])
+  consigneeCustomer Customer?         @relation("InvoiceConsignee", fields: [consigneeCustomerId], references: [id], onDelete: SetNull)
   payments   Payment[]
   notesDocs  CreditDebitNote[]
   activities InvoiceActivity[]
