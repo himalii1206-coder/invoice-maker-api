@@ -164,6 +164,11 @@ export const listQuotationsSchema = z.object({
         errorMap: () => ({ message: 'Invalid quotation status' })
       })
       .optional(),
+    availableForInvoice: z
+      .union([z.boolean(), z.enum(['true', 'false'])])
+      .transform((val) => val === true || val === 'true')
+      .optional(),
+    includeId: z.string().uuid('Invalid quotation id').optional(),
     startDate: optionalDateField('Start date'),
     endDate: optionalDateField('End date'),
     financialYear: z.string().trim().optional(),

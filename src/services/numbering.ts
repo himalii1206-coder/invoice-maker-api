@@ -187,6 +187,28 @@ export class NumberingService {
       return Boolean(existing);
     }
 
+    if (documentType === DocumentType.CUSTOMER) {
+      const existing = await tx.customer.findFirst({
+        where: { companyId, customerCode: number },
+        select: { id: true }
+      });
+      return Boolean(existing);
+    }
+
+    if (documentType === DocumentType.PRODUCT) {
+      const existing = await tx.product.findFirst({
+        where: {
+          companyId,
+          OR: [
+            { productCode: { equals: number, mode: 'insensitive' } },
+            { sku: { equals: number, mode: 'insensitive' } }
+          ]
+        },
+        select: { id: true }
+      });
+      return Boolean(existing);
+    }
+
     const existing = await tx.creditDebitNote.findUnique({
       where: { companyId_noteNumber: { companyId, noteNumber: number } },
       select: { id: true }
@@ -233,7 +255,10 @@ export class NumberingService {
     if (!Number.isFinite(sequenceNo) || sequenceNo <= 0) return;
 
     const settings = await InvoiceSettingsService.getOrCreate(companyId, tx);
-    const periodKey = periodKeyFor(settings.resetMode, date);
+    const periodKey =
+      documentType === DocumentType.CUSTOMER || documentType === DocumentType.PRODUCT
+        ? 'ALL'
+        : periodKeyFor(settings.resetMode, date);
 
     const existing = await tx.documentSequence.findUnique({
       where: { companyId_documentType_periodKey: { companyId, documentType, periodKey } },
@@ -272,10 +297,21 @@ export class NumberingService {
     padding = 4
   ): Promise<string> {
     const cleanPrefix = (prefix || '').trim().toUpperCase();
-    const sequenceNo = await this.claimNext(tx, companyId, documentType, 'ALL', 1);
-    const padded = String(sequenceNo).padStart(Math.min(Math.max(padding, 1), 10), '0');
 
-    return cleanPrefix ? `${cleanPrefix}-${padded}` : padded;
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+      const sequenceNo = await this.claimNext(tx, companyId, documentType, 'ALL', 1);
+      const padded = String(sequenceNo).padStart(Math.min(Math.max(padding, 1), 10), '0');
+      const code = cleanPrefix ? `${cleanPrefix}-${padded}` : padded;
+
+      const clash = await this.isTaken(tx, companyId, documentType, code);
+      if (!clash) {
+        return code;
+      }
+    }
+
+    throw AppError.conflict(
+      `Could not allocate a unique ${documentType.toLowerCase()} code. Please review your settings.`
+    );
   }
 
   /**
@@ -294,9 +330,40 @@ export class NumberingService {
       },
       select: { nextNumber: true }
     });
-    const sequenceNo = sequence?.nextNumber ?? 1;
-    const padded = String(sequenceNo).padStart(Math.min(Math.max(padding, 1), 10), '0');
+    let sequenceNo = sequence?.nextNumber ?? 1;
 
+    for (let i = 0; i < 50; i += 1) {
+      const padded = String(sequenceNo).padStart(Math.min(Math.max(padding, 1), 10), '0');
+      const code = cleanPrefix ? `${cleanPrefix}-${padded}` : padded;
+
+      let clash = false;
+      if (documentType === DocumentType.PRODUCT) {
+        const existing = await prisma.product.findFirst({
+          where: {
+            companyId,
+            OR: [
+              { productCode: { equals: code, mode: 'insensitive' } },
+              { sku: { equals: code, mode: 'insensitive' } }
+            ]
+          },
+          select: { id: true }
+        });
+        clash = Boolean(existing);
+      } else if (documentType === DocumentType.CUSTOMER) {
+        const existing = await prisma.customer.findFirst({
+          where: { companyId, customerCode: code },
+          select: { id: true }
+        });
+        clash = Boolean(existing);
+      }
+
+      if (!clash) {
+        return code;
+      }
+      sequenceNo += 1;
+    }
+
+    const padded = String(sequenceNo).padStart(Math.min(Math.max(padding, 1), 10), '0');
     return cleanPrefix ? `${cleanPrefix}-${padded}` : padded;
   }
 

@@ -167,17 +167,23 @@ export class ProductService {
     this.assertHsnPresent(settings, input.hsnSacCode);
 
     return prisma.$transaction(async (tx) => {
-      // A hand-entered code wins; otherwise one is generated from the prefix
+      // A hand-entered code wins and reserves its sequence number; otherwise one is generated from the prefix
       // configured in settings.
-      const productCode =
-        input.productCode ??
-        input.sku ??
-        (await NumberingService.allocateEntityCode(
+      let productCode: string;
+      if (input.productCode || input.sku) {
+        productCode = (input.productCode || input.sku)!;
+        const seqNo = NumberingService.extractSequenceNo(productCode);
+        if (seqNo > 0) {
+          await NumberingService.reserveManualNumber(tx, companyId, DocumentType.PRODUCT, seqNo);
+        }
+      } else {
+        productCode = await NumberingService.allocateEntityCode(
           tx,
           companyId,
           DocumentType.PRODUCT,
           settings.productCodePrefix
-        ));
+        );
+      }
 
       return tx.product.create({
         data: {

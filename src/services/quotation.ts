@@ -75,6 +75,8 @@ export interface QuotationListParams {
   search?: string;
   customerId?: string;
   status?: QuotationStatus;
+  availableForInvoice?: boolean;
+  includeId?: string;
   startDate?: string;
   endDate?: string;
   financialYear?: string;
@@ -619,6 +621,30 @@ export class QuotationService {
         };
       } else {
         where.status = params.status;
+      }
+    } else if (params.availableForInvoice) {
+      const availableCondition: Prisma.QuotationWhereInput = {
+        status: {
+          notIn: [QuotationStatus.CONVERTED, QuotationStatus.CANCELLED, QuotationStatus.REJECTED]
+        },
+        convertedInvoiceId: null
+      };
+
+      if (params.includeId) {
+        where.AND = [
+          ...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []),
+          {
+            OR: [
+              availableCondition,
+              { id: params.includeId }
+            ]
+          }
+        ];
+      } else {
+        where.status = {
+          notIn: [QuotationStatus.CONVERTED, QuotationStatus.CANCELLED, QuotationStatus.REJECTED]
+        };
+        where.convertedInvoiceId = null;
       }
     }
 
