@@ -161,8 +161,17 @@ export const resolveState = (value?: string | null): IndianState | null => {
 export const stateByCode = (code?: string | null): IndianState | null =>
   code ? BY_CODE.get(code.trim()) ?? null : null;
 
-/** Canonical display form stored on documents, e.g. "24-Gujarat". */
-export const formatPlaceOfSupply = (state: IndianState): string => `${state.code}-${state.name}`;
+export const normaliseStateName = (value?: string | null): string | null => {
+  if (!value) return null;
+  const state = resolveState(value);
+  if (state) return state.name;
+  const trimmed = value.trim();
+  const match = trimmed.match(/^\d{2}\s*[-–—]?\s*(.+)$/);
+  return match ? match[1].trim() : trimmed || null;
+};
+
+/** Clean name stored on documents, e.g. "Gujarat". */
+export const formatPlaceOfSupply = (state: IndianState): string => state.name;
 
 /** A GSTIN carries its state code in the first two digits. */
 export const stateCodeFromGstin = (gstin?: string | null): string | null => {

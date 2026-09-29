@@ -100,8 +100,12 @@ export class AuthService {
             ifscCode: input.ifscCode || null,
             branch: input.branch || null,
             upiId: encryptField(input.upiId) || null,
-            invoicePrefix: input.invoicePrefix || 'INV-',
-            nextInvoiceNumber: input.nextInvoiceNumber || 1001
+            invoiceSettings: {
+              create: {
+                invoicePrefix: (input.invoicePrefix || 'INV').replace(/[-_/]$/, '') || 'INV',
+                startNumber: input.nextInvoiceNumber || 1001
+              }
+            }
           }
         });
 
@@ -123,8 +127,7 @@ export class AuthService {
       },
       company: {
         id: result.company.id,
-        name: result.company.name,
-        invoicePrefix: result.company.invoicePrefix
+        name: result.company.name
       },
       ...tokens
     };
@@ -159,23 +162,7 @@ export class AuthService {
       ipAddress: input.ipAddress
     });
 
-    let company = user.company;
-    if (!company) {
-      const businessName =
-        `${user.firstName || ''} ${user.lastName || ''}`.trim() ||
-        user.email.split('@')[0] ||
-        'My Business';
-
-      company = await prisma.company.create({
-        data: {
-          userId: user.id,
-          name: businessName,
-          invoicePrefix: 'INV-',
-          nextInvoiceNumber: 1001,
-          country: 'India'
-        }
-      });
-    }
+    const company = user.company ?? (await this.ensureCompany(user));
 
     return {
       user: {
@@ -187,8 +174,7 @@ export class AuthService {
       },
       company: {
         id: company.id,
-        name: company.name,
-        invoicePrefix: company.invoicePrefix
+        name: company.name
       },
       ...tokens
     };
@@ -242,8 +228,7 @@ export class AuthService {
       },
       company: {
         id: company.id,
-        name: company.name,
-        invoicePrefix: company.invoicePrefix
+        name: company.name
       },
       ...tokens
     };
@@ -262,7 +247,7 @@ export class AuthService {
 
     const company = await prisma.company.findUnique({
       where: { id: companyId },
-      select: { id: true, name: true, invoicePrefix: true }
+      select: { id: true, name: true }
     });
 
     return {
@@ -273,7 +258,7 @@ export class AuthService {
         lastName: user.lastName,
         role: user.role
       },
-      company: company ?? { id: companyId, name: '', invoicePrefix: 'INV-' },
+      company: company ?? { id: companyId, name: '' },
       ...tokens
     };
   }
@@ -294,8 +279,6 @@ export class AuthService {
       data: {
         userId: user.id,
         name: businessName,
-        invoicePrefix: 'INV-',
-        nextInvoiceNumber: 1001,
         country: 'India'
       }
     });
@@ -338,23 +321,7 @@ export class AuthService {
       meta
     );
 
-    let company = session.user.company;
-    if (!company) {
-      const businessName =
-        `${session.user.firstName || ''} ${session.user.lastName || ''}`.trim() ||
-        session.user.email.split('@')[0] ||
-        'My Business';
-
-      company = await prisma.company.create({
-        data: {
-          userId: session.user.id,
-          name: businessName,
-          invoicePrefix: 'INV-',
-          nextInvoiceNumber: 1001,
-          country: 'India'
-        }
-      });
-    }
+    const company = session.user.company ?? (await this.ensureCompany(session.user));
 
     return {
       user: {
@@ -366,8 +333,7 @@ export class AuthService {
       },
       company: {
         id: company.id,
-        name: company.name,
-        invoicePrefix: company.invoicePrefix
+        name: company.name
       },
       ...tokens
     };
@@ -445,8 +411,6 @@ export class AuthService {
             userId: user.id,
             name: businessName,
             email: user.email.toLowerCase(),
-            invoicePrefix: 'INV-',
-            nextInvoiceNumber: 1001,
             country: 'India'
           },
           include: {

@@ -1,4 +1,4 @@
-import { PrismaClient, UserRole, CustomerType, InvoiceStatus, PaymentMethod, NoteType, NoteStatus, ActivityType, PurchaseBillStatus, ItemCategory, ItcEligibility, NotificationEvent } from '@prisma/client';
+import { PrismaClient, UserRole, CustomerType, InvoiceStatus, PaymentMethod, ActivityType, PurchaseBillStatus, ItemCategory, ItcEligibility, NotificationEvent } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 
 const prisma = new PrismaClient();
@@ -24,7 +24,6 @@ async function main() {
         lastName: 'Demo',
         passwordHash,
         role: UserRole.OWNER,
-        isEmailVerified: true,
         company: {
           create: {
             name: 'Acme Enterprise Solutions Pvt. Ltd.',
@@ -801,58 +800,7 @@ async function main() {
     }
     console.log(`✅ Seeded purchase bills and vendor logs.`);
 
-    // 7. Create Sample Credit Note
-    const firstPaidInv = createdInvoices.find((inv) => inv.status === InvoiceStatus.PAID);
-    if (firstPaidInv) {
-      const existingNote = await prisma.creditDebitNote.findFirst({
-        where: { companyId: company.id, noteNumber: 'CN-1001' }
-      });
-      if (!existingNote) {
-        await prisma.creditDebitNote.create({
-          data: {
-            companyId: company.id,
-            customerId: firstPaidInv.customerId,
-            invoiceId: firstPaidInv.id,
-            noteType: NoteType.CREDIT,
-            noteNumber: 'CN-1001',
-            sequenceNo: 1,
-            financialYear: currentFY,
-            status: NoteStatus.ISSUED,
-            noteDate: new Date(),
-            reason: 'Volume sales rebate and price correction discount.',
-            billingName: firstPaidInv.billingName,
-            billingGstin: firstPaidInv.billingGstin,
-            billingState: firstPaidInv.billingState,
-            placeOfSupply: firstPaidInv.placeOfSupply,
-            subtotal: 1000,
-            taxableAmount: 1000,
-            taxAmount: 180,
-            cgstAmount: firstPaidInv.isIgst ? 0 : 90,
-            sgstAmount: firstPaidInv.isIgst ? 0 : 90,
-            igstAmount: firstPaidInv.isIgst ? 180 : 0,
-            grandTotal: 1180,
-            items: {
-              create: [
-                {
-                  name: 'Post-Sale Discount Rebate',
-                  hsnSacCode: '998313',
-                  quantity: 1,
-                  unitPrice: 1000,
-                  taxRate: 18,
-                  subtotal: 1000,
-                  taxableAmount: 1000,
-                  taxAmount: 180,
-                  total: 1180
-                }
-              ]
-            }
-          }
-        });
-        console.log(`✅ Seeded Credit Note CN-1001.`);
-      }
-    }
-
-    // 8. Create Sample In-App Notifications
+    // 7. Create Sample In-App Notifications
     const notifs = [
       {
         event: NotificationEvent.PAYMENT_RECEIVED,

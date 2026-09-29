@@ -360,7 +360,7 @@ export class ReportService {
   static async gstSummary(companyId: string, scope: ReportScope = {}) {
     const invoiceWhere = buildScope(companyId, scope);
 
-    const [items, invoiceTotals, noteTotals] = await Promise.all([
+    const [items, invoiceTotals] = await Promise.all([
       prisma.invoiceItem.findMany({
         where: { invoice: invoiceWhere },
         select: {
@@ -377,25 +377,6 @@ export class ReportService {
       }),
       prisma.invoice.aggregate({
         where: invoiceWhere,
-        _count: true,
-        _sum: {
-          taxableAmount: true,
-          cgstAmount: true,
-          sgstAmount: true,
-          igstAmount: true,
-          taxAmount: true,
-          grandTotal: true
-        }
-      }),
-      // Credit notes reduce output tax; debit notes add to it.
-      prisma.creditDebitNote.groupBy({
-        by: ['noteType'],
-        where: {
-          companyId,
-          status: 'ISSUED',
-          ...(scope.financialYear && { financialYear: scope.financialYear })
-        },
-        orderBy: { noteType: 'asc' },
         _count: true,
         _sum: {
           taxableAmount: true,
@@ -471,12 +452,7 @@ export class ReportService {
       byHsn.set(hsnKey, hsnRow);
     }
 
-    const credit = noteTotals.find((row) => row.noteType === 'CREDIT');
-    const debit = noteTotals.find((row) => row.noteType === 'DEBIT');
-
     const outputTax = round2(invoiceTotals._sum?.taxAmount ?? 0);
-    const creditTax = round2(credit?._sum?.taxAmount ?? 0);
-    const debitTax = round2(debit?._sum?.taxAmount ?? 0);
 
     return {
       invoiceCount: invoiceTotals._count,
@@ -486,20 +462,7 @@ export class ReportService {
       igstAmount: round2(invoiceTotals._sum?.igstAmount ?? 0),
       taxAmount: outputTax,
       totalAmount: round2(invoiceTotals._sum?.grandTotal ?? 0),
-      creditNotes: {
-        count: credit?._count ?? 0,
-        taxableAmount: round2(credit?._sum?.taxableAmount ?? 0),
-        taxAmount: creditTax,
-        totalAmount: round2(credit?._sum?.grandTotal ?? 0)
-      },
-      debitNotes: {
-        count: debit?._count ?? 0,
-        taxableAmount: round2(debit?._sum?.taxableAmount ?? 0),
-        taxAmount: debitTax,
-        totalAmount: round2(debit?._sum?.grandTotal ?? 0)
-      },
-      /** What is actually payable after notes are applied. */
-      netTaxPayable: round2(outputTax + debitTax - creditTax),
+      netTaxPayable: outputTax,
       byRate: Array.from(byRate.values()).sort((a, b) => a.taxRate - b.taxRate),
       byHsn: Array.from(byHsn.values()).sort(
         (a, b) => b.taxableAmount - a.taxableAmount || a.hsnSacCode.localeCompare(b.hsnSacCode)

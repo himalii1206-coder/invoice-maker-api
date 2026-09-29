@@ -2,11 +2,11 @@ import { Prisma, PurchaseBillStatus, ItcEligibility, ItemCategory, PaymentMethod
 import { prisma } from '../config/database.js';
 import { AppError } from '../utils/error.js';
 import { PaginationMeta } from '../types/index.js';
-import { round2, toNumber, toPaise, fromPaise } from '../utils/money.js';
-import { financialYearOf, addDays } from '../utils/date.js';
-import { computeDocument, resolveSupply, TaxLineInput } from './tax.js';
-import { NumberingService } from './numbering.js';
+import { round2, toNumber } from '../utils/money.js';
+import { financialYearOf, addDays, startOfDay } from '../utils/date.js';
+import { computeDocument, resolveSupply } from './tax.js';
 import { decryptObject } from '../utils/encryption.js';
+import { normaliseStateName } from '../constants/gst.js';
 
 export interface PurchaseBillItemInput {
   productId?: string | null;
@@ -255,14 +255,14 @@ export class PurchaseBillService {
           vendorEmail: vendorSnapshot.vendorEmail || vendor.email || null,
           vendorAddress: vendorSnapshot.vendorAddress || vendor.address || null,
           vendorCity: vendorSnapshot.vendorCity || vendor.city || null,
-          vendorState: vendorSnapshot.vendorState || vendor.state || null,
+          vendorState: normaliseStateName(vendorSnapshot.vendorState || vendor.state) || null,
           vendorCountry: vendorSnapshot.vendorCountry || vendor.country || 'India',
           vendorPostalCode: vendorSnapshot.vendorPostalCode || vendor.postalCode || null
         };
       }
     }
 
-    const billDate = input.billDate ? new Date(input.billDate) : new Date();
+    const billDate = startOfDay(input.billDate ?? new Date());
     const fy = financialYearOf(billDate);
 
     // Auto calculate supply location (Intrastate CGST+SGST vs Interstate IGST)
@@ -316,7 +316,7 @@ export class PurchaseBillService {
       billNumber = `PB-${fy}-${String(sequenceNo).padStart(4, '0')}`;
     }
 
-    const dueDate = input.dueDate ? new Date(input.dueDate) : addDays(billDate, 30);
+    const dueDate = input.dueDate ? startOfDay(input.dueDate) : startOfDay(addDays(billDate, 30));
 
     const purchaseBill = await prisma.$transaction(
       async (tx) => {
@@ -472,7 +472,9 @@ export class PurchaseBillService {
         orderBy:
           sortBy === 'createdAt'
             ? [{ createdAt: sortOrder }]
-            : [{ [sortBy]: sortOrder }, { createdAt: 'desc' }]
+            : sortBy === 'billNumber'
+            ? [{ sequenceNo: sortOrder }, { createdAt: sortOrder }]
+            : [{ [sortBy]: sortOrder }, { sequenceNo: sortOrder }, { createdAt: sortOrder }]
       })
     ]);
 
@@ -544,16 +546,16 @@ export class PurchaseBillService {
             ...(input.vendorInvoiceNumber !== undefined ? { vendorInvoiceNumber: input.vendorInvoiceNumber } : {}),
             ...(input.billNumber !== undefined ? { billNumber: input.billNumber } : {}),
             ...(input.paymentTerms !== undefined ? { paymentTerms: input.paymentTerms } : {}),
-            ...(input.dueDate !== undefined ? { dueDate: input.dueDate ? new Date(input.dueDate) : null } : {}),
-            ...(input.billDate !== undefined ? { billDate, financialYear: fy } : {}),
+            ...(input.dueDate !== undefined ? { dueDate: input.dueDate ? startOfDay(input.dueDate) : null } : {}),
+            ...(input.billDate !== undefined ? { billDate: startOfDay(input.billDate), financialYear: fy } : {}),
             ...(input.poNumber !== undefined ? { poNumber: input.poNumber } : {}),
-            ...(input.poDate !== undefined ? { poDate: input.poDate ? new Date(input.poDate) : null } : {}),
+            ...(input.poDate !== undefined ? { poDate: input.poDate ? startOfDay(input.poDate) : null } : {}),
             ...(input.grnNumber !== undefined ? { grnNumber: input.grnNumber } : {}),
-            ...(input.grnDate !== undefined ? { grnDate: input.grnDate ? new Date(input.grnDate) : null } : {}),
+            ...(input.grnDate !== undefined ? { grnDate: input.grnDate ? startOfDay(input.grnDate) : null } : {}),
             ...(input.transporterName !== undefined ? { transporterName: input.transporterName } : {}),
             ...(input.vehicleNumber !== undefined ? { vehicleNumber: input.vehicleNumber } : {}),
             ...(input.lrNumber !== undefined ? { lrNumber: input.lrNumber } : {}),
-            ...(input.lrDate !== undefined ? { lrDate: input.lrDate ? new Date(input.lrDate) : null } : {}),
+            ...(input.lrDate !== undefined ? { lrDate: input.lrDate ? startOfDay(input.lrDate) : null } : {}),
             ...(input.vendorName !== undefined ? { vendorName: input.vendorName } : {}),
             ...(input.vendorGstin !== undefined ? { vendorGstin: input.vendorGstin } : {}),
             ...(input.vendorPhone !== undefined ? { vendorPhone: input.vendorPhone } : {}),

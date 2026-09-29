@@ -69,8 +69,6 @@ export const resolveCompany = async (
       data: {
         userId: user.id,
         name: businessName,
-        invoicePrefix: 'INV-',
-        nextInvoiceNumber: 1001,
         country: 'India'
       },
       select: { id: true }

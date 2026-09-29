@@ -33,19 +33,12 @@ export const updateInvoiceSettingsSchema = z.object({
         .regex(/^[A-Za-z0-9_\-\/]+$/, 'Invoice prefix can only contain letters, numbers, hyphens or slashes')
         .optional(),
       invoiceSuffix: optionalText(12, 'Invoice suffix'),
-      creditNotePrefix: z
+      quotationPrefix: z
         .string()
         .trim()
-        .min(1, 'Credit note prefix is required')
-        .max(12, 'Credit note prefix must be at most 12 characters')
-        .regex(/^[A-Za-z0-9_\-\/]+$/, 'Credit note prefix can only contain letters, numbers, hyphens or slashes')
-        .optional(),
-      debitNotePrefix: z
-        .string()
-        .trim()
-        .min(1, 'Debit note prefix is required')
-        .max(12, 'Debit note prefix must be at most 12 characters')
-        .regex(/^[A-Za-z0-9_\-\/]+$/, 'Debit note prefix can only contain letters, numbers, hyphens or slashes')
+        .min(1, 'Quotation prefix is required')
+        .max(12, 'Quotation prefix must be at most 12 characters')
+        .regex(/^[A-Za-z0-9_\-\/]+$/, 'Quotation prefix can only contain letters, numbers, hyphens or slashes')
         .optional(),
       numberSeparator: z
         .enum(['-', '/', '_', ''], {

@@ -3,6 +3,7 @@ import { prisma } from '../config/database.js';
 import { AppError } from '../utils/error.js';
 import { PaginationMeta } from '../types/index.js';
 import { encryptField, decryptObject } from '../utils/encryption.js';
+import { normaliseStateName } from '../constants/gst.js';
 
 export interface CreateVendorInput {
   name: string;
@@ -88,7 +89,7 @@ export class VendorService {
       pan: input.pan ? encryptField(input.pan.trim().toUpperCase()) : null,
       address: input.address?.trim() || null,
       city: input.city?.trim() || null,
-      state: input.state?.trim() || null,
+      state: input.state ? normaliseStateName(input.state) : null,
       country: input.country?.trim() || 'India',
       postalCode: input.postalCode?.trim() || null,
       bankName: input.bankName?.trim() || null,
@@ -290,7 +291,7 @@ export class VendorService {
       ...(input.pan !== undefined ? { pan: input.pan ? encryptField(input.pan.trim().toUpperCase()) : null } : {}),
       ...(input.address !== undefined ? { address: input.address?.trim() || null } : {}),
       ...(input.city !== undefined ? { city: input.city?.trim() || null } : {}),
-      ...(input.state !== undefined ? { state: input.state?.trim() || null } : {}),
+      ...(input.state !== undefined ? { state: input.state ? normaliseStateName(input.state) : null } : {}),
       ...(input.country !== undefined ? { country: input.country?.trim() || 'India' } : {}),
       ...(input.postalCode !== undefined ? { postalCode: input.postalCode?.trim() || null } : {}),
       ...(input.bankName !== undefined ? { bankName: input.bankName?.trim() || null } : {}),

@@ -9,6 +9,7 @@ import { sendResponse } from '../utils/response.js';
 import { AuthRequest } from '../types/index.js';
 import { AppError } from '../utils/error.js';
 import { encryptField, decryptObject } from '../utils/encryption.js';
+import { normaliseStateName } from '../constants/gst.js';
 
 const router = Router();
 
@@ -106,7 +107,7 @@ router.put(
       if (phone !== undefined) dataToUpdate.phone = phone ? phone.trim() : null;
       if (address !== undefined) dataToUpdate.address = address ? address.trim() : null;
       if (city !== undefined) dataToUpdate.city = city ? city.trim() : null;
-      if (state !== undefined) dataToUpdate.state = state ? state.trim() : null;
+      if (state !== undefined) dataToUpdate.state = state ? normaliseStateName(state) : null;
       if (country !== undefined) dataToUpdate.country = country ? country.trim() : 'India';
       if (postalCode !== undefined) dataToUpdate.postalCode = postalCode ? postalCode.trim() : null;
       if (gstin !== undefined) dataToUpdate.gstin = gstin ? encryptField(gstin.trim().toUpperCase()) : null;

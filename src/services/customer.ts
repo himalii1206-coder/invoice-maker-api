@@ -6,6 +6,7 @@ import { InvoiceSettingsService } from './invoiceSettings.js';
 import { NumberingService } from './numbering.js';
 import { NotificationService } from './notification.js';
 import { encryptField, decryptObject } from '../utils/encryption.js';
+import { normaliseStateName } from '../constants/gst.js';
 
 export interface CreateCustomerInput {
   name: string;
@@ -275,7 +276,7 @@ export class CustomerService {
     }
   }
 
-  static async create(companyId: string, input: CreateCustomerInput) {
+  static async create(companyId: string, input: CreateCustomerInput, userId?: string) {
     await this.assertEmailIsFree(companyId, input.email);
 
     const settings = await InvoiceSettingsService.getOrCreate(companyId);
@@ -303,7 +304,7 @@ export class CustomerService {
           address: input.address ?? null,
           factoryAddress: input.factoryAddress ?? null,
           city: input.city ?? null,
-          state: input.state ?? null,
+          state: input.state ? normaliseStateName(input.state) : null,
           country: input.country ?? 'India',
           postalCode: input.postalCode ?? null,
           officeNo: input.officeNo ?? null,
@@ -329,7 +330,8 @@ export class CustomerService {
       event: NotificationEvent.CUSTOMER_ADDED,
       title: `New customer: ${customer.name}`,
       body: customer.customerCode ? `Account code ${customer.customerCode}` : undefined,
-      link: `/customers/${customer.id}`
+      link: `/customers/${customer.id}`,
+      actorUserId: userId
     });
 
     return decryptObject(customer, ['gstin', 'accountNumber']);
@@ -360,6 +362,8 @@ export class CustomerService {
           data.gstin = input.gstin ? encryptField(input.gstin.trim().toUpperCase()) : null;
         } else if (key === 'accountNumber') {
           data.accountNumber = input.accountNumber ? encryptField(input.accountNumber.trim()) : null;
+        } else if (key === 'state') {
+          data.state = input.state ? normaliseStateName(input.state) : null;
         } else {
           (data as any)[key] = input[key] ?? null;
         }
@@ -401,13 +405,13 @@ export class CustomerService {
     if (data.country === null) delete (data as any).country;
     if (data.isActive === null) delete (data as any).isActive;
 
-    const updated = await prisma.customer.update({
+    await prisma.customer.update({
       where: { id },
       data,
       select: customerSelect
     });
 
-    return decryptObject(updated, ['gstin', 'accountNumber']);
+    return this.getById(companyId, id);
   }
 
   static async remove(companyId: string, id: string) {
@@ -439,11 +443,13 @@ export class CustomerService {
   static async setStatus(companyId: string, id: string, isActive: boolean) {
     await this.assertExists(companyId, id);
 
-    return prisma.customer.update({
+    await prisma.customer.update({
       where: { id },
       data: { isActive },
       select: customerSelect
     });
+
+    return this.getById(companyId, id);
   }
 
   /** Confirms the row exists *and* belongs to this business before any write. */

@@ -43,25 +43,6 @@ async function main() {
     });
   }
 
-  // 3. Fix CreditDebitNotes
-  const notes = await prisma.creditDebitNote.findMany({
-    where: {
-      billingGstin: {
-        startsWith: 'enc:v1:'
-      }
-    },
-    select: { id: true, billingGstin: true }
-  });
-
-  console.log(`Found ${notes.length} notes with encrypted billingGstin`);
-  for (const note of notes) {
-    const plain = decryptField(note.billingGstin);
-    await prisma.creditDebitNote.update({
-      where: { id: note.id },
-      data: { billingGstin: plain }
-    });
-  }
-
   console.log('✅ Cleanup completed successfully.');
 }
 

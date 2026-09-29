@@ -34,7 +34,11 @@ export class CustomerController {
 
   static async create(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
     try {
-      const customer = await CustomerService.create(companyIdOf(req), req.body);
+      const customer = await CustomerService.create(
+        companyIdOf(req),
+        req.body,
+        req.user?.userId
+      );
       sendResponse(res, 201, 'Customer created successfully', customer);
     } catch (error) {
       next(error);

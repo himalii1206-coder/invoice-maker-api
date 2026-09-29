@@ -1,13 +1,14 @@
-import { Prisma, QuotationStatus, DocumentType, ActivityType, InvoiceStatus } from '@prisma/client';
+import { Prisma, QuotationStatus, DocumentType, ActivityType, InvoiceStatus, NotificationEvent } from '@prisma/client';
 import { prisma } from '../config/database.js';
 import { AppError } from '../utils/error.js';
-import { PaginationMeta } from '../types/index.js';
-import { Decimalish, round2, toNumber, toPaise, fromPaise, roundOffToRupee } from '../utils/money.js';
-import { financialYearOf } from '../utils/date.js';
-import { resolveSupply, TaxLineInput } from './tax.js';
+import { round2, toNumber, toPaise, fromPaise, roundOffToRupee } from '../utils/money.js';
+import { startOfDay, addDays, financialYearOf } from '../utils/date.js';
+import { resolveSupply } from './tax.js';
 import { NumberingService } from './numbering.js';
 import { InvoiceSettingsService } from './invoiceSettings.js';
+import { NotificationService } from './notification.js';
 import { encryptField, decryptField, decryptObject } from '../utils/encryption.js';
+import { normaliseStateName } from '../constants/gst.js';
 
 const decryptQuotation = <T extends Record<string, any>>(q: T): T => {
   if (!q) return q;
@@ -21,6 +22,9 @@ const decryptQuotation = <T extends Record<string, any>>(q: T): T => {
   if (result.company) {
     result.company = decryptObject(result.company, ['gstin', 'pan', 'accountNumber', 'upiId']);
   }
+  const resolvedTerms = result.terms ?? result.termsAndConditions ?? null;
+  result.terms = resolvedTerms;
+  result.termsAndConditions = resolvedTerms;
   return result;
 };
 
@@ -63,6 +67,7 @@ export interface CreateQuotationInput {
   forwardingPackagingAmount?: number;
   notes?: string | null;
   terms?: string | null;
+  termsAndConditions?: string | null;
   status?: QuotationStatus;
   items: QuotationItemInput[];
 }
@@ -190,15 +195,16 @@ export class QuotationService {
     const taxAmount = fromPaise(totalTaxPaise);
 
     const fwdAmount = round2(Math.max(0, forwardingPackaging));
-    const secondTotal = round2(taxableAmount + taxAmount + fwdAmount);
+    const secondTotalPaise = totalTaxablePaise + totalTaxPaise + toPaise(fwdAmount);
+    const secondTotal = fromPaise(secondTotalPaise);
 
     let roundOff = 0;
     let grandTotal = secondTotal;
 
     if (enableRoundOff) {
-      const roundRes = roundOffToRupee(secondTotal);
-      roundOff = roundRes.adjustment;
-      grandTotal = roundRes.total;
+      const roundRes = roundOffToRupee(secondTotalPaise);
+      roundOff = fromPaise(roundRes.adjustment);
+      grandTotal = fromPaise(roundRes.total);
     }
 
     return {
@@ -257,7 +263,7 @@ export class QuotationService {
       }
     }
 
-    const qDate = input.quotationDate ? new Date(input.quotationDate) : new Date();
+    const qDate = startOfDay(input.quotationDate ?? new Date());
     const financialYear = financialYearOf(qDate);
 
     const placeOfSupplyTarget = input.placeOfSupply || input.billingState || customerSnapshot.billingState;
@@ -304,10 +310,10 @@ export class QuotationService {
           status: initialStatus,
           subject: input.subject?.trim() || null,
           inquiryNumber: input.inquiryNumber?.trim() || null,
-          inquiryDate: input.inquiryDate ? new Date(input.inquiryDate) : null,
+          inquiryDate: input.inquiryDate ? startOfDay(input.inquiryDate) : null,
           referenceNumber: input.referenceNumber?.trim() || null,
           quotationDate: qDate,
-          validUntil: input.validUntil ? new Date(input.validUntil) : null,
+          validUntil: input.validUntil ? startOfDay(input.validUntil) : null,
           paymentTerms: input.paymentTerms?.trim() || '50% Advance',
           currency: input.currency || 'INR',
 
@@ -317,7 +323,7 @@ export class QuotationService {
           billingGstin: (input.billingGstin ? decryptField(input.billingGstin.trim()) : null) || customerSnapshot.billingGstin || null,
           billingAddress: input.billingAddress?.trim() || customerSnapshot.billingAddress || null,
           billingCity: input.billingCity?.trim() || customerSnapshot.billingCity || null,
-          billingState: input.billingState?.trim() || customerSnapshot.billingState || null,
+          billingState: input.billingState ? normaliseStateName(input.billingState) : (customerSnapshot.billingState ? normaliseStateName(customerSnapshot.billingState) : null),
           billingCountry: input.billingCountry?.trim() || customerSnapshot.billingCountry || 'India',
           billingPostalCode: input.billingPostalCode?.trim() || customerSnapshot.billingPostalCode || null,
 
@@ -338,7 +344,7 @@ export class QuotationService {
           grandTotal: totals.grandTotal,
 
           notes: input.notes?.trim() || null,
-          terms: input.terms?.trim() || null,
+          terms: input.terms?.trim() || input.termsAndConditions?.trim() || null,
 
           sentAt: initialStatus === QuotationStatus.SENT ? new Date() : null,
 
@@ -393,12 +399,10 @@ export class QuotationService {
       throw AppError.notFound('Quotation not found');
     }
 
-    if (existing.status === QuotationStatus.CONVERTED) {
-      throw AppError.badRequest('Converted quotations cannot be modified');
-    }
-
-    if (existing.status === QuotationStatus.CANCELLED) {
-      throw AppError.badRequest('Cancelled quotations cannot be modified');
+    if (existing.status !== QuotationStatus.DRAFT) {
+      throw AppError.badRequest(
+        `Only draft quotations can be modified. This quotation is currently ${existing.status.toLowerCase()}.`
+      );
     }
 
     const company = await prisma.company.findUnique({
@@ -408,7 +412,7 @@ export class QuotationService {
 
     const settings = await InvoiceSettingsService.getOrCreate(companyId);
 
-    const qDate = input.quotationDate ? new Date(input.quotationDate) : existing.quotationDate;
+    const qDate = input.quotationDate ? startOfDay(input.quotationDate) : startOfDay(existing.quotationDate);
     const financialYear = financialYearOf(qDate);
 
     // If new items provided, recalculate. Otherwise reuse existing lines.
@@ -460,11 +464,11 @@ export class QuotationService {
           customerId: input.customerId !== undefined ? input.customerId : existing.customerId,
           subject: input.subject !== undefined ? input.subject?.trim() || null : existing.subject,
           inquiryNumber: input.inquiryNumber !== undefined ? input.inquiryNumber?.trim() || null : existing.inquiryNumber,
-          inquiryDate: input.inquiryDate !== undefined ? (input.inquiryDate ? new Date(input.inquiryDate) : null) : existing.inquiryDate,
+          inquiryDate: input.inquiryDate !== undefined ? (input.inquiryDate ? startOfDay(input.inquiryDate) : null) : existing.inquiryDate,
           referenceNumber: input.referenceNumber !== undefined ? input.referenceNumber?.trim() || null : existing.referenceNumber,
           quotationDate: qDate,
           financialYear,
-          validUntil: input.validUntil !== undefined ? (input.validUntil ? new Date(input.validUntil) : null) : existing.validUntil,
+          validUntil: input.validUntil !== undefined ? (input.validUntil ? startOfDay(input.validUntil) : null) : existing.validUntil,
           paymentTerms: input.paymentTerms !== undefined ? input.paymentTerms?.trim() || null : existing.paymentTerms,
           currency: input.currency || existing.currency,
 
@@ -474,7 +478,7 @@ export class QuotationService {
           billingGstin: input.billingGstin !== undefined ? (input.billingGstin ? decryptField(input.billingGstin.trim()) : null) : decryptField(existing.billingGstin),
           billingAddress: input.billingAddress !== undefined ? input.billingAddress?.trim() || null : existing.billingAddress,
           billingCity: input.billingCity !== undefined ? input.billingCity?.trim() || null : existing.billingCity,
-          billingState: input.billingState !== undefined ? input.billingState?.trim() || null : existing.billingState,
+          billingState: input.billingState !== undefined ? (input.billingState ? normaliseStateName(input.billingState) : null) : (existing.billingState ? normaliseStateName(existing.billingState) : null),
           billingCountry: input.billingCountry !== undefined ? input.billingCountry?.trim() || 'India' : existing.billingCountry,
           billingPostalCode: input.billingPostalCode !== undefined ? input.billingPostalCode?.trim() || null : existing.billingPostalCode,
 
@@ -495,7 +499,12 @@ export class QuotationService {
           grandTotal: totals.grandTotal,
 
           notes: input.notes !== undefined ? input.notes?.trim() || null : existing.notes,
-          terms: input.terms !== undefined ? input.terms?.trim() || null : existing.terms,
+          terms:
+            input.terms !== undefined
+              ? input.terms?.trim() || null
+              : input.termsAndConditions !== undefined
+              ? input.termsAndConditions?.trim() || null
+              : existing.terms,
 
           items: input.items
             ? {
@@ -623,11 +632,19 @@ export class QuotationService {
         where.status = params.status;
       }
     } else if (params.availableForInvoice) {
+      const now = new Date(new Date().setHours(0, 0, 0, 0));
       const availableCondition: Prisma.QuotationWhereInput = {
-        status: {
-          notIn: [QuotationStatus.CONVERTED, QuotationStatus.CANCELLED, QuotationStatus.REJECTED]
-        },
-        convertedInvoiceId: null
+        convertedInvoiceId: null,
+        OR: [
+          { status: QuotationStatus.ACCEPTED },
+          {
+            status: QuotationStatus.SENT,
+            OR: [
+              { validUntil: null },
+              { validUntil: { gte: now } }
+            ]
+          }
+        ]
       };
 
       if (params.includeId) {
@@ -641,10 +658,17 @@ export class QuotationService {
           }
         ];
       } else {
-        where.status = {
-          notIn: [QuotationStatus.CONVERTED, QuotationStatus.CANCELLED, QuotationStatus.REJECTED]
-        };
         where.convertedInvoiceId = null;
+        where.OR = [
+          { status: QuotationStatus.ACCEPTED },
+          {
+            status: QuotationStatus.SENT,
+            OR: [
+              { validUntil: null },
+              { validUntil: { gte: now } }
+            ]
+          }
+        ];
       }
     }
 
@@ -675,8 +699,13 @@ export class QuotationService {
         orderBy:
           sortBy === 'createdAt'
             ? [{ createdAt: sortOrder }]
-            : [{ [sortBy]: sortOrder }, { createdAt: 'desc' }],
+            : sortBy === 'quotationNumber'
+            ? [{ sequenceNo: sortOrder }, { createdAt: sortOrder }]
+            : [{ [sortBy]: sortOrder }, { sequenceNo: sortOrder }, { createdAt: sortOrder }],
         include: {
+          items: {
+            orderBy: { sortOrder: 'asc' }
+          },
           customer: {
             select: { id: true, name: true, email: true, phone: true }
           },
@@ -991,7 +1020,7 @@ export class QuotationService {
       inquiryNumber: existing.inquiryNumber,
       inquiryDate: existing.inquiryDate,
       referenceNumber: existing.referenceNumber,
-      quotationDate: new Date(),
+      quotationDate: startOfDay(new Date()),
       paymentTerms: existing.paymentTerms,
       currency: existing.currency,
 
@@ -1061,7 +1090,11 @@ export class QuotationService {
       throw AppError.notFound('Quotation not found');
     }
 
-    if (quotation.status === QuotationStatus.CONVERTED && quotation.convertedInvoiceId) {
+    if (quotation.status === QuotationStatus.DRAFT) {
+      throw AppError.badRequest('Cannot convert a draft quotation. The quotation must be sent or accepted first.');
+    }
+
+    if (quotation.status === QuotationStatus.CONVERTED || quotation.convertedInvoiceId) {
       throw AppError.badRequest('This quotation has already been converted to an invoice');
     }
 
@@ -1071,6 +1104,15 @@ export class QuotationService {
 
     if (quotation.status === QuotationStatus.REJECTED) {
       throw AppError.badRequest('Cannot convert a rejected quotation');
+    }
+
+    const isExpired =
+      quotation.status === QuotationStatus.SENT &&
+      quotation.validUntil &&
+      new Date(quotation.validUntil).getTime() < new Date().setHours(0, 0, 0, 0);
+
+    if (isExpired) {
+      throw AppError.badRequest('Cannot convert an expired quotation. Please renew or re-issue the quotation.');
     }
 
     // Need a customer record to create an invoice in Invoice Maker
@@ -1092,7 +1134,7 @@ export class QuotationService {
             gstin: quotation.billingGstin ? encryptField(decryptField(quotation.billingGstin)) : null,
             address: quotation.billingAddress,
             city: quotation.billingCity,
-            state: quotation.billingState,
+            state: quotation.billingState ? normaliseStateName(quotation.billingState) : null,
             country: quotation.billingCountry || 'India',
             postalCode: quotation.billingPostalCode
           }
@@ -1101,13 +1143,12 @@ export class QuotationService {
       }
     }
 
-    const invoiceDate = new Date();
+    const invoiceDate = startOfDay(new Date());
     const financialYear = financialYearOf(invoiceDate);
 
     const invoiceSettings = await InvoiceSettingsService.getOrCreate(companyId);
     const dueDays = invoiceSettings.defaultDueDays || 15;
-    const dueDate = new Date(invoiceDate);
-    dueDate.setDate(dueDate.getDate() + dueDays);
+    const dueDate = startOfDay(addDays(invoiceDate, dueDays));
 
     const invoice = await prisma.$transaction(async (tx) => {
       // Atomically allocate next invoice number inside transaction
@@ -1230,6 +1271,15 @@ export class QuotationService {
       });
 
       return createdInvoice;
+    });
+
+    await NotificationService.notify({
+      companyId,
+      event: NotificationEvent.INVOICE_CREATED,
+      title: `Invoice ${invoice.invoiceNumber} created from Quotation`,
+      body: `${quotation.billingName} - ${quotation.quotationNumber}`,
+      link: `/invoices/${invoice.id}`,
+      actorUserId: userId
     });
 
     return invoice;

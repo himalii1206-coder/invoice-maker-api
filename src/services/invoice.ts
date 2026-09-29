@@ -10,6 +10,7 @@ import { InvoiceSettingsService } from './invoiceSettings.js';
 import { NotificationService } from './notification.js';
 import { ActivityService } from './activity.js';
 import { decryptField, decryptObject } from '../utils/encryption.js';
+import { normaliseStateName } from '../constants/gst.js';
 
 const decryptInvoice = <T extends Record<string, any>>(inv: T): T => {
   if (!inv) return inv;
@@ -181,8 +182,6 @@ const invoiceListSelect = {
   roundOff: true,
   grandTotal: true,
   amountPaid: true,
-  creditNoteTotal: true,
-  debitNoteTotal: true,
   balanceDue: true,
   poNumber: true,
   orderDate: true,
@@ -238,7 +237,6 @@ const invoiceDetailSelect = {
   terms: true,
   internalNotes: true,
   cancelledReason: true,
-  viewedAt: true,
   sequenceNo: true,
   consigneeCustomer: {
     select: {
@@ -311,19 +309,6 @@ const invoiceDetailSelect = {
       createdAt: true
     }
   },
-  notesDocs: {
-    where: { status: { not: 'CANCELLED' } },
-    orderBy: { noteDate: 'desc' },
-    select: {
-      id: true,
-      noteType: true,
-      noteNumber: true,
-      noteDate: true,
-      status: true,
-      grandTotal: true,
-      reason: true
-    }
-  },
   quotations: {
     select: {
       id: true,
@@ -361,8 +346,6 @@ export type EditMode = 'full' | 'limited' | 'none';
 interface AmountState {
   grandTotal: number;
   amountPaid: number;
-  creditNoteTotal: number;
-  debitNoteTotal: number;
   dueDate: Date;
   status: InvoiceStatus;
 }
@@ -374,21 +357,16 @@ export class InvoiceService {
 
   /** Outstanding balance, never negative: an overpayment is not a credit here. */
   static computeBalance(state: Omit<AmountState, 'dueDate' | 'status'>): number {
-    const balance =
-      toPaise(state.grandTotal) +
-      toPaise(state.debitNoteTotal) -
-      toPaise(state.creditNoteTotal) -
-      toPaise(state.amountPaid);
-
+    const balance = toPaise(state.grandTotal) - toPaise(state.amountPaid);
     return fromPaise(Math.max(0, balance));
   }
 
   /**
    * Single source of truth for an invoice's status.
    *
-   * Derived rather than stored-and-edited so a payment, a credit note and the
-   * passage of time all land on the same answer. A draft stays a draft until
-   * someone sends it, and a cancelled invoice is terminal.
+   * Derived rather than stored-and-edited so a payment and the passage of time
+   * all land on the same answer. A draft stays a draft until someone sends it,
+   * and a cancelled invoice is terminal.
    */
   static deriveStatus(state: AmountState): InvoiceStatus {
     if (state.status === InvoiceStatus.CANCELLED) return InvoiceStatus.CANCELLED;
@@ -406,7 +384,7 @@ export class InvoiceService {
 
   /**
    * Recomputes derived money and status from whatever is currently stored.
-   * Called after any payment or note change so those services never have to
+   * Called after any payment change so those services never have to
    * reimplement the rules.
    */
   static async syncState(
@@ -429,34 +407,21 @@ export class InvoiceService {
 
     if (!invoice) return;
 
-    const [paymentAgg, creditAgg, debitAgg] = await Promise.all([
-      client.payment.aggregate({ where: { invoiceId }, _sum: { amount: true } }),
-      client.creditDebitNote.aggregate({
-        where: { invoiceId, noteType: 'CREDIT', status: 'ISSUED' },
-        _sum: { grandTotal: true }
-      }),
-      client.creditDebitNote.aggregate({
-        where: { invoiceId, noteType: 'DEBIT', status: 'ISSUED' },
-        _sum: { grandTotal: true }
-      })
-    ]);
+    const paymentAgg = await client.payment.aggregate({
+      where: { invoiceId },
+      _sum: { amount: true }
+    });
 
     const amountPaid = round2(paymentAgg._sum.amount ?? 0);
-    const creditNoteTotal = round2(creditAgg._sum.grandTotal ?? 0);
-    const debitNoteTotal = round2(debitAgg._sum.grandTotal ?? 0);
 
     const balanceDue = this.computeBalance({
       grandTotal: toNumber(invoice.grandTotal),
-      amountPaid,
-      creditNoteTotal,
-      debitNoteTotal
+      amountPaid
     });
 
     const status = this.deriveStatus({
       grandTotal: toNumber(invoice.grandTotal),
       amountPaid,
-      creditNoteTotal,
-      debitNoteTotal,
       dueDate: invoice.dueDate,
       status: invoice.status
     });
@@ -465,8 +430,6 @@ export class InvoiceService {
       where: { id: invoiceId },
       data: {
         amountPaid,
-        creditNoteTotal,
-        debitNoteTotal,
         balanceDue,
         status,
         paidAt:
@@ -558,10 +521,12 @@ export class InvoiceService {
 
     const orderBy: Prisma.InvoiceOrderByWithRelationInput[] =
       query.sortBy === 'billingName'
-        ? [{ billingName: query.sortOrder }, { createdAt: 'desc' }]
+        ? [{ billingName: query.sortOrder }, { sequenceNo: query.sortOrder }, { createdAt: query.sortOrder }]
         : query.sortBy === 'createdAt'
         ? [{ createdAt: query.sortOrder }]
-        : [{ [query.sortBy]: query.sortOrder }, { createdAt: 'desc' }, { sequenceNo: 'desc' }];
+        : query.sortBy === 'invoiceNumber'
+        ? [{ sequenceNo: query.sortOrder }, { createdAt: query.sortOrder }]
+        : [{ [query.sortBy]: query.sortOrder }, { sequenceNo: query.sortOrder }, { createdAt: query.sortOrder }];
 
     const [invoices, total, totals] = await prisma.$transaction([
       prisma.invoice.findMany({
@@ -989,7 +954,7 @@ export class InvoiceService {
             billingGstin: decryptField(customer.gstin),
             billingAddress: customer.address,
             billingCity: customer.city,
-            billingState: customer.state,
+            billingState: customer.state ? normaliseStateName(customer.state) : null,
             billingCountry: customer.country ?? 'India',
             billingPostalCode: customer.postalCode,
 
@@ -1000,7 +965,7 @@ export class InvoiceService {
             shippingGstin: input.shippingGstin || (consigneeCustomer ? decryptField(consigneeCustomer.gstin) : null),
             shippingAddress: input.shippingAddress || consigneeCustomer?.address || null,
             shippingCity: input.shippingCity || consigneeCustomer?.city || null,
-            shippingState: input.shippingState || consigneeCustomer?.state || null,
+            shippingState: (input.shippingState || consigneeCustomer?.state) ? normaliseStateName(input.shippingState || consigneeCustomer?.state) : null,
             shippingCountry: input.shippingCountry || consigneeCustomer?.country || 'India',
             shippingPostalCode: input.shippingPostalCode || consigneeCustomer?.postalCode || null,
 
@@ -1132,8 +1097,6 @@ export class InvoiceService {
         dueDate: true,
         customerId: true,
         amountPaid: true,
-        creditNoteTotal: true,
-        debitNoteTotal: true,
         currency: true,
         placeOfSupply: true,
         isIgst: true,
@@ -1221,7 +1184,7 @@ export class InvoiceService {
         data.billingGstin = decryptField(customer.gstin);
         data.billingAddress = customer.address;
         data.billingCity = customer.city;
-        data.billingState = customer.state;
+        data.billingState = customer.state ? normaliseStateName(customer.state) : null;
         data.billingCountry = customer.country ?? 'India';
         data.billingPostalCode = customer.postalCode;
       }
@@ -1259,9 +1222,7 @@ export class InvoiceService {
           grandTotal: computed.grandTotal,
           balanceDue: this.computeBalance({
             grandTotal: computed.grandTotal,
-            amountPaid: toNumber(existing.amountPaid),
-            creditNoteTotal: toNumber(existing.creditNoteTotal),
-            debitNoteTotal: toNumber(existing.debitNoteTotal)
+            amountPaid: toNumber(existing.amountPaid)
           })
         });
 

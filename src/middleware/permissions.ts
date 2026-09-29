@@ -14,8 +14,7 @@ const RANK: Record<UserRole, number> = {
   [UserRole.OWNER]: 40,
   [UserRole.ADMIN]: 30,
   [UserRole.ACCOUNTANT]: 20,
-  [UserRole.STAFF]: 10,
-  [UserRole.MEMBER]: 10
+  [UserRole.STAFF]: 10
 };
 
 export const roleRank = (role: string | undefined): number =>

@@ -5,12 +5,6 @@ import { AppError } from '../utils/error.js';
 /**
  * Per-business invoice settings: numbering rules, document defaults and
  * presentation options.
- *
- * `Company` still carries the original `invoicePrefix` / `nextInvoiceNumber`
- * columns from before this module existed. They remain the source of truth for
- * the auth payload, so the first read here seeds the settings row from them -
- * an existing business keeps numbering where it left off instead of jumping
- * back to 1.
  */
 
 export const invoiceSettingsSelect = {
@@ -18,8 +12,6 @@ export const invoiceSettingsSelect = {
   companyId: true,
   invoicePrefix: true,
   invoiceSuffix: true,
-  creditNotePrefix: true,
-  debitNotePrefix: true,
   quotationPrefix: true,
   numberSeparator: true,
   numberPadding: true,
@@ -71,8 +63,6 @@ export type InvoiceSettingsRecord = Prisma.InvoiceSettingsGetPayload<{
 export interface UpdateInvoiceSettingsInput {
   invoicePrefix?: string;
   invoiceSuffix?: string | null;
-  creditNotePrefix?: string;
-  debitNotePrefix?: string;
   quotationPrefix?: string;
   numberSeparator?: string;
   numberPadding?: number;
@@ -115,28 +105,14 @@ export interface UpdateInvoiceSettingsInput {
   autoMarkOverdue?: boolean;
 }
 
-/** Trailing punctuation in the legacy prefix is the separator, not the prefix. */
-const splitLegacyPrefix = (raw: string): { prefix: string; separator: string } => {
-  const match = raw.match(/^(.*?)([-/_\s])?$/);
-  const prefix = (match?.[1] ?? raw).trim();
-  const separator = match?.[2] ?? '-';
-
-  return {
-    prefix: prefix || 'INV',
-    separator: separator.trim() === '' ? '-' : separator
-  };
-};
-
 export class InvoiceSettingsService {
   /**
-   * Returns the settings row, creating it on first use.
-   *
-   * Runs inside the caller's transaction when one is passed, so numbering can
-   * read settings and allocate a number atomically.
+   * Loads settings for a business, lazily initialising them to defaults if
+   * this is the first time they have been touched.
    */
   static async getOrCreate(
     companyId: string,
-    client: Prisma.TransactionClient = prisma
+    client: Prisma.TransactionClient | typeof prisma = prisma
   ): Promise<InvoiceSettingsRecord> {
     const existing = await client.invoiceSettings.findUnique({
       where: { companyId },
@@ -147,28 +123,22 @@ export class InvoiceSettingsService {
 
     const company = await client.company.findUnique({
       where: { id: companyId },
-      select: { invoicePrefix: true, nextInvoiceNumber: true, defaultTaxRate: true }
+      select: { id: true }
     });
 
     if (!company) {
       throw AppError.notFound('No business profile found for this account');
     }
 
-    const { prefix, separator } = splitLegacyPrefix(company.invoicePrefix ?? 'INV-');
-
-    // A business that was already numbering from 1001 must not restart at 1.
-    const startNumber = Math.max(1, company.nextInvoiceNumber ?? 1);
-
     return client.invoiceSettings.create({
       data: {
         companyId,
-        invoicePrefix: prefix,
-        numberSeparator: separator,
-        startNumber,
-        defaultTaxRate: company.defaultTaxRate ?? 18,
-        // Pre-existing numbers had no year segment; keep them comparable.
-        includeYearInNumber: false,
-        resetMode: NumberResetMode.NEVER
+        invoicePrefix: 'INV',
+        numberSeparator: '-',
+        startNumber: 1,
+        defaultTaxRate: 18,
+        includeYearInNumber: true,
+        resetMode: NumberResetMode.FINANCIAL_YEAR
       },
       select: invoiceSettingsSelect
     });
@@ -197,8 +167,7 @@ export class InvoiceSettingsService {
       [
         'invoicePrefix',
         'invoiceSuffix',
-        'creditNotePrefix',
-        'debitNotePrefix',
+        'quotationPrefix',
         'numberSeparator',
         'numberPadding',
         'startNumber',
@@ -246,14 +215,6 @@ export class InvoiceSettingsService {
       data,
       select: invoiceSettingsSelect
     });
-
-    // Keep the legacy company columns aligned; the auth payload still reads them.
-    if (input.invoicePrefix !== undefined || input.numberSeparator !== undefined) {
-      await prisma.company.update({
-        where: { id: companyId },
-        data: { invoicePrefix: `${updated.invoicePrefix}${updated.numberSeparator}` }
-      });
-    }
 
     return updated;
   }

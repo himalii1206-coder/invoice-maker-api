@@ -28,12 +28,10 @@ export interface AllocatedNumber {
 
 const prefixFor = (settings: InvoiceSettingsRecord, documentType: DocumentType): string => {
   switch (documentType) {
-    case DocumentType.CREDIT_NOTE:
-      return settings.creditNotePrefix;
-    case DocumentType.DEBIT_NOTE:
-      return settings.debitNotePrefix;
     case DocumentType.QUOTATION:
       return settings.quotationPrefix || 'QT';
+    case DocumentType.PURCHASE_BILL:
+      return 'PB';
     default:
       return settings.invoicePrefix;
   }
@@ -209,11 +207,7 @@ export class NumberingService {
       return Boolean(existing);
     }
 
-    const existing = await tx.creditDebitNote.findUnique({
-      where: { companyId_noteNumber: { companyId, noteNumber: number } },
-      select: { id: true }
-    });
-    return Boolean(existing);
+    return false;
   }
 
   /** prefix - [year] - padded sequence - [suffix], e.g. "INV-2026-27-0001". */

@@ -100,6 +100,7 @@ const quotationBodyFields = {
 
   notes: optionalText(2000, 'Notes'),
   terms: optionalText(3000, 'Terms & conditions'),
+  termsAndConditions: optionalText(3000, 'Terms & conditions'),
 
   items: z.array(quotationItemSchema).min(1, 'A quotation must contain at least one line item')
 };

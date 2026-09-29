@@ -86,9 +86,17 @@ export class NotificationService {
 
       if (people.length === 0) return;
 
+      // Exclude the actor who triggered the action so they are not notified of their own creations.
+      // Other members in the company receive the notification.
+      const recipients = input.actorUserId
+        ? people.filter((person) => person.id !== input.actorUserId)
+        : people;
+
+      if (recipients.length === 0) return;
+
       if (settings.notifyInApp) {
         await prisma.notification.createMany({
-          data: people.map((person) => ({
+          data: recipients.map((person) => ({
             companyId: input.companyId,
             userId: person.id,
             event: input.event,
@@ -113,7 +121,7 @@ export class NotificationService {
         // Fire-and-forget: the recipients are internal staff, and a slow SMTP
         // server must not hold up the request that triggered this.
         void Promise.all(
-          people.map((person) =>
+          recipients.map((person) =>
             sendEmail({ to: person.email, subject: input.title, html })
           )
         ).catch((error) => console.error('Notification email failed:', error));

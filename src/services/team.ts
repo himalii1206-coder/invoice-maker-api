@@ -285,8 +285,7 @@ export class TeamService {
           lastName: input.lastName?.trim() || '',
           // The account-level role mirrors the membership, so a member who never
           // owns a business still carries a sensible role on their own record.
-          role: member.role,
-          isEmailVerified: true
+          role: member.role
         },
         select: {
           id: true,
